@@ -1,0 +1,120 @@
+{
+  "theme": {
+    "mode": "dark",
+    "archetype": "LUXURY_NOIR",
+    "description": "Premium Casino Analytics Dashboard. A sophisticated, dark-first UI blending high-end casino aesthetics with dense, functional dashboard data. Focuses on matte charcoal surfaces, subtle glassmorphism, and restrained electric gold and emerald accents."
+  },
+  "typography": {
+    "headings": "Cabinet Grotesk",
+    "body": "Manrope",
+    "mono": "JetBrains Mono",
+    "rules": [
+      "Use Cabinet Grotesk for all major headings and score numbers.",
+      "Use Manrope for body text, labels, and explanations.",
+      "Use JetBrains Mono for specific math formulas or poker hand strings.",
+      "Apply tracking-tight to headings and tracking-widest to uppercase overlines.",
+      "Never use Inter for headings."
+    ]
+  },
+  "colors": {
+    "background": "#09090b",
+    "surface": "#18181b",
+    "surface_elevated": "#27272a",
+    "primary": "#d4af37",
+    "primary_glow": "rgba(212, 175, 55, 0.2)",
+    "success": "#10b981",
+    "warning": "#f59e0b",
+    "danger": "#e11d48",
+    "text_primary": "#fafafa",
+    "text_secondary": "#a1a1aa",
+    "border": "#27272a",
+    "playing_card_bg": "#ffffff",
+    "suit_red": "#ef4444",
+    "suit_black": "#09090b",
+    "rules": [
+      "No pure black or white for structural elements.",
+      "Use primary (gold) sparingly for main CTA and highest premium recommendations.",
+      "Use success/warning/danger for framework scoring and validation statuses.",
+      "Playing cards must have a white background for physical realism and high contrast against the dark UI."
+    ]
+  },
+  "visual_enhancers": {
+    "shadows": [
+      "Soft ambient glows for active states (e.g., gold glow around a premium recommendation).",
+      "No harsh drop shadows on dark mode; use 1px inner borders (e.g., border-t border-white/10) to define edges."
+    ],
+    "textures": [
+      "Subtle noise overlay on the main background to reduce digital flatness.",
+      "Use glassmorphism (backdrop-blur-xl bg-zinc-900/50) for sticky panels or overlays."
+    ],
+    "borders": "1px solid border-zinc-800 on all cards and bento grid items."
+  },
+  "layouts": {
+    "structure": "Bento Grid System",
+    "sections": [
+      {
+        "name": "Header",
+        "description": "Brand logo, title, and validation status stack (pills)."
+      },
+      {
+        "name": "Card Selector (Hero)",
+        "description": "Prominent top section displaying 4 selectable playing cards. Use a horizontal flex layout with generous spacing. Add an 'Evaluate' and 'Reset' button here."
+      },
+      {
+        "name": "Dashboard Grid",
+        "description": "A 3-column bento grid for desktop. Column 1 & 2: Decision Summary & Framework Classes. Column 3: Teaching / Scoop Potential."
+      },
+      {
+        "name": "Decision Summary Panel",
+        "description": "Massive typography for recommendation (Play/Fold), accompanied by a large score grid."
+      },
+      {
+        "name": "Framework Classes",
+        "description": "A 2x2 grid of metric cards (L, H, F, R). Use progress bars or segmented blocks to visualize levels (e.g., 3 out of 4)."
+      }
+    ]
+  },
+  "motion": {
+    "rules": [
+      "Use Framer Motion for playing card entrance animations (staggered flip or slide in).",
+      "Hover states on buttons should include a slight scale (scale-105) and border glow.",
+      "Number counters for the score should animate on evaluation.",
+      "Ensure all animations respect prefers-reduced-motion."
+    ]
+  },
+  "components": {
+    "playing_card": "A bespoke component mimicking a physical card. Must have rounded-xl, shadow-lg, and crisp typography for rank/suit.",
+    "status_pill": "Small rounded-full badges with dot indicators for validation (e.g., '4 cards selected').",
+    "metric_card": "Dashboard widget for framework classes. Minimalist, with the value clearly highlighted in the respective color (green/yellow/red).",
+    "recommendation_chip": "A large, bold display element indicating the final decision. Should use a gradient text or intense glow for 'Premium' hands."
+  },
+  "accessibility": {
+    "rules": [
+      "All interactive elements MUST have data-testid attributes (e.g., data-testid='card-selector-slot-1').",
+      "Ensure minimum 4.5:1 contrast for text.",
+      "Focus states must be highly visible (e.g., ring-2 ring-gold)."
+    ]
+  },
+  "images": {
+    "background_texture": "https://images.unsplash.com/photo-1779144640727-ad885f804960?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDF8MHwxfHNlYXJjaHwxfHxwcmVtaXVtJTIwcG9rZXIlMjBjaGlwcyUyMGRhcmslMjBhZXN0aGV0aWN8ZW58MHx8fHwxNzg0OTk1ODYwfDA&ixlib=rb-4.1.0&q=85",
+    "usage": "Use this as a very low opacity (5%) background image behind the main dashboard to add a premium casino atmosphere, masked with a radial gradient so it fades into black at the edges."
+  },
+  "instructions_to_main_agent": [
+    "Build a single-page interactive dashboard using React, Tailwind, and Shadcn UI.",
+    "Implement the full Omaha8 4-card selection logic (handling Rank, Suit, uniqueness validation).",
+    "Do NOT use basic HTML <select> for cards; build a custom popover or modal selector using Shadcn components.",
+    "Construct the Bento grid exactly as described: highly dense, data-rich, yet readable through stark contrast and ample inner padding (p-6 or p-8 inside cards).",
+    "Cards should pop visually against the dark theme. Ensure they have white backgrounds with standard red/black suits.",
+    "Include teaching elements clearly: math equations should use a monospace font.",
+    "Integrate Framer Motion for smooth state transitions when evaluating hands.",
+    "Add 'data-testid' to all buttons, card slots, and score displays."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "Do not use default centered layouts. Left-align dashboard content.",
+    "Use glass-morphism effects with backdrop filters for floating elements.",
+    "Never use AI assistant emojis.",
+    "Use Lucide-react for icons.",
+    "Use sonner for toasts (e.g., 'Invalid hand selected').",
+    "Prioritize optical alignment and generous spacing (p-6, p-8) over cramped default paddings."
+  ]
+}
