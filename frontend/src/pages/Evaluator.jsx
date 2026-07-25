@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence, useMotionValue, animate } from "framer-motion";
 import { toast } from "sonner";
-import { Spade, RotateCcw, Zap, Loader2, Target, CheckCircle2, XCircle } from "lucide-react";
+import { Spade, RotateCcw, Zap, Loader2, Target, CheckCircle2, XCircle, Share2, Link2, FileText } from "lucide-react";
 import { CardSelector } from "../components/CardSelector";
 import { MetricCard } from "../components/MetricCard";
-import { DEFAULT_HAND, cardId, validateHand } from "../lib/cards";
+import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
+import { DEFAULT_HAND, cardId, validateHand, encodeHand, decodeHand } from "../lib/cards";
 import { evaluateHand } from "../lib/api";
 
 const BANNER = {
@@ -39,7 +40,10 @@ const StatusPill = ({ ok, label, testid }) => (
 );
 
 export default function Evaluator() {
-  const [cards, setCards] = useState(DEFAULT_HAND);
+  const [cards, setCards] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return decodeHand(params.get("hand")) || DEFAULT_HAND;
+  });
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const debounceRef = useRef(null);
@@ -80,6 +84,25 @@ export default function Evaluator() {
   const reset = () => {
     setCards(DEFAULT_HAND);
     toast.success("Example hand restored.");
+  };
+
+  // Keep the address bar in sync so the current hand is always shareable.
+  useEffect(() => {
+    if (!validation.ready) return;
+    window.history.replaceState(null, "", `${window.location.pathname}?hand=${encodeHand(cards)}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(cards)]);
+
+  const shareLink = () => {
+    const url = `${window.location.origin}${window.location.pathname}?hand=${encodeHand(cards)}`;
+    navigator.clipboard.writeText(url).then(() => toast.success("Share link copied to clipboard."));
+  };
+
+  const shareSummary = () => {
+    if (!result) return;
+    const hand = result.cards.map((c) => `${c.rank}${c.symbol}`).join(" ");
+    const text = `${hand} \u2192 ${result.action.action} (${result.total}/${result.max_total}), ${result.plan}, ${result.scoop.label} scoop`;
+    navigator.clipboard.writeText(text).then(() => toast.success("Hand summary copied."));
   };
 
   const banner = result ? BANNER[result.action.banner] : BANNER.good;
@@ -146,6 +169,42 @@ export default function Evaluator() {
                   <RotateCcw className="w-4 h-4" />
                   Reset
                 </button>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button
+                      data-testid="share-btn"
+                      disabled={!validation.ready}
+                      className="inline-flex items-center gap-2 rounded-full border border-zinc-700 px-6 py-3 text-sm font-semibold text-zinc-300 transition-colors hover:bg-zinc-800 disabled:opacity-40"
+                    >
+                      <Share2 className="w-4 h-4" />
+                      Share
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-60 bg-zinc-900 border-zinc-700 text-zinc-100 p-2">
+                    <button
+                      data-testid="share-link-btn"
+                      onClick={shareLink}
+                      className="w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm hover:bg-zinc-800 transition-colors"
+                    >
+                      <Link2 className="w-4 h-4 text-[#d4af37]" />
+                      <span className="text-left">
+                        <span className="block font-semibold">Copy link</span>
+                        <span className="block text-xs text-zinc-500">Loads this exact hand</span>
+                      </span>
+                    </button>
+                    <button
+                      data-testid="share-summary-btn"
+                      onClick={shareSummary}
+                      className="w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm hover:bg-zinc-800 transition-colors"
+                    >
+                      <FileText className="w-4 h-4 text-[#d4af37]" />
+                      <span className="text-left">
+                        <span className="block font-semibold">Copy summary</span>
+                        <span className="block text-xs text-zinc-500">Hand + verdict as text</span>
+                      </span>
+                    </button>
+                  </PopoverContent>
+                </Popover>
               </div>
             </div>
             <div className="flex justify-center lg:justify-end gap-3 sm:gap-4">

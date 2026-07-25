@@ -21,6 +21,25 @@ export const DEFAULT_HAND = [
 
 export const cardId = (c) => `${c.rank}${c.suit}`;
 
+const VALID_RANKS = new Set(RANKS);
+const VALID_SUITS = new Set(SUITS.map((s) => s.code));
+
+export function encodeHand(cards) {
+  return cards.map((c) => `${c.rank}${c.suit}`).join("-");
+}
+
+export function decodeHand(str) {
+  if (!str) return null;
+  const tokens = str.split("-");
+  if (tokens.length !== 4) return null;
+  const cards = tokens.map((t) => ({ rank: t.slice(0, -1), suit: t.slice(-1) }));
+  const valid = cards.every((c) => VALID_RANKS.has(c.rank) && VALID_SUITS.has(c.suit));
+  if (!valid) return null;
+  const ids = cards.map(cardId);
+  if (new Set(ids).size !== 4) return null;
+  return cards;
+}
+
 export function validateHand(cards) {
   const ids = cards.map(cardId);
   const complete = cards.length === 4 && cards.every((c) => c.rank && c.suit);
