@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence, useMotionValue, animate } from "framer-motion";
 import { toast } from "sonner";
-import { Spade, RotateCcw, Zap, Loader2, Target, CheckCircle2, XCircle, Share2, Link2, FileText } from "lucide-react";
+import { Spade, RotateCcw, Zap, Loader2, Target, CheckCircle2, XCircle, Share2, Link2, FileText, Camera } from "lucide-react";
 import { CardSelector } from "../components/CardSelector";
 import { MetricCard } from "../components/MetricCard";
 import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
 import { DEFAULT_HAND, cardId, validateHand, encodeHand, decodeHand } from "../lib/cards";
-import { evaluateHand } from "../lib/api";
+import { evaluateHand, recognizeCards } from "../lib/api";
 
 const BANNER = {
   good: { chip: "bg-[#d4af37] text-zinc-900", glow: "shadow-[0_0_60px_-12px_rgba(212,175,55,0.5)]", accent: "text-[#d4af37]" },
@@ -46,7 +46,9 @@ export default function Evaluator() {
   });
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [scanning, setScanning] = useState(false);
   const debounceRef = useRef(null);
+  const fileRef = useRef(null);
 
   const usedIds = cards.map(cardId);
   const validation = validateHand(cards);
@@ -103,6 +105,27 @@ export default function Evaluator() {
     const hand = result.cards.map((c) => `${c.rank}${c.symbol}`).join(" ");
     const text = `${hand} \u2192 ${result.action.action} (${result.total}/${result.max_total}), ${result.plan}, ${result.scoop.label} scoop`;
     navigator.clipboard.writeText(text).then(() => toast.success("Hand summary copied."));
+  };
+
+  const onPhotoSelected = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-uploading the same file
+    if (!file) return;
+    if (!["image/jpeg", "image/jpg", "image/png", "image/webp"].includes(file.type)) {
+      toast.error("Please upload a JPEG, PNG, or WEBP image.");
+      return;
+    }
+    setScanning(true);
+    const t = toast.loading("Reading your cards\u2026");
+    try {
+      const detected = await recognizeCards(file);
+      setCards(detected);
+      toast.success("Cards detected! Check and adjust if needed.", { id: t });
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Could not read the cards. Try a clearer photo.", { id: t });
+    } finally {
+      setScanning(false);
+    }
   };
 
   const banner = result ? BANNER[result.action.banner] : BANNER.good;
@@ -168,6 +191,23 @@ export default function Evaluator() {
                 >
                   <RotateCcw className="w-4 h-4" />
                   Reset
+                </button>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="hidden"
+                  data-testid="photo-input"
+                  onChange={onPhotoSelected}
+                />
+                <button
+                  data-testid="scan-photo-btn"
+                  onClick={() => fileRef.current?.click()}
+                  disabled={scanning}
+                  className="inline-flex items-center gap-2 rounded-full border border-[#d4af37]/40 bg-[#d4af37]/10 px-6 py-3 text-sm font-semibold text-[#d4af37] transition-colors hover:bg-[#d4af37]/20 disabled:opacity-40"
+                >
+                  {scanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Camera className="w-4 h-4" />}
+                  Scan photo
                 </button>
                 <Popover>
                   <PopoverTrigger asChild>

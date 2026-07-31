@@ -1,12 +1,16 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import json
+import base64
 import logging
+import uuid
 from pathlib import Path
 from pydantic import BaseModel, field_validator
 from typing import List, Dict, Any
+from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -297,6 +301,93 @@ async def evaluate(req: EvaluateRequest):
         return evaluate_hand(req.cards)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ----------------------------------------------------------------------------
+# Card photo recognition (vision) — extracts 4 cards from an uploaded image
+# ----------------------------------------------------------------------------
+
+EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
+ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/jpg', 'image/png', 'image/webp'}
+
+RECOGNIZE_PROMPT = (
+    "You are a playing-card recognizer. The image shows exactly four playing cards. "
+    "Identify each card's rank and suit, reading left to right. "
+    "Respond with ONLY valid JSON, no markdown, in this exact shape: "
+    '{"cards":[{"rank":"A","suit":"S"},{"rank":"K","suit":"H"},'
+    '{"rank":"10","suit":"D"},{"rank":"7","suit":"C"}]}. '
+    "rank must be one of: A, K, Q, J, 10, 9, 8, 7, 6, 5, 4, 3, 2 (use \"10\" for ten). "
+    "suit must be one of: S (spades), H (hearts), D (diamonds), C (clubs). "
+    "Always return exactly four cards. If a card is unclear, give your best guess."
+)
+
+
+def _parse_cards_json(text: str) -> List[Dict[str, str]]:
+    cleaned = text.strip()
+    if cleaned.startswith('```'):
+        cleaned = cleaned.strip('`')
+        if cleaned.lower().startswith('json'):
+            cleaned = cleaned[4:]
+    start, end = cleaned.find('{'), cleaned.rfind('}')
+    if start != -1 and end != -1:
+        cleaned = cleaned[start:end + 1]
+    data = json.loads(cleaned)
+    raw = data.get('cards', [])
+    result = []
+    for c in raw:
+        rank = str(c.get('rank', '')).upper().strip()
+        if rank in ('T', '10'):
+            rank = '10'
+        suit = str(c.get('suit', '')).upper().strip()[:1]
+        if rank in RANK_VALUE and suit in SUITS:
+            result.append({'rank': rank, 'suit': suit})
+    return result
+
+
+@api_router.post("/recognize-cards")
+async def recognize_cards(file: UploadFile = File(...)):
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(status_code=500, detail="LLM key not configured on the server.")
+    if file.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(status_code=400,
+                            detail="Unsupported image type. Please upload a JPEG, PNG, or WEBP.")
+
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Empty image file.")
+    image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"card-recognize-{uuid.uuid4()}",
+        system_message="You extract structured data from images and reply with JSON only.",
+    ).with_model("openai", "gpt-5.4")
+
+    try:
+        response = await chat.send_message(
+            UserMessage(text=RECOGNIZE_PROMPT, file_contents=[ImageContent(image_base64=image_b64)])
+        )
+    except Exception as e:
+        logger.error(f"Vision model error: {e}")
+        raise HTTPException(status_code=502, detail="The vision model could not process the image.")
+
+    try:
+        cards = _parse_cards_json(response)
+    except Exception as e:
+        logger.error(f"Card parse error: {e} | raw: {response!r}")
+        raise HTTPException(status_code=422,
+                            detail="Could not read the cards clearly. Try a sharper, well-lit photo.")
+
+    if len(cards) != 4:
+        raise HTTPException(status_code=422,
+                            detail=f"Expected 4 cards but detected {len(cards)}. Try a clearer photo of all four cards.")
+
+    ids = [f"{c['rank']}{c['suit']}" for c in cards]
+    if len(set(ids)) != 4:
+        raise HTTPException(status_code=422,
+                            detail="Detected duplicate cards. Please retake the photo so all four cards are distinct.")
+
+    return {"cards": cards}
 
 
 app.include_router(api_router)
