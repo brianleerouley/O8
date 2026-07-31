@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence, useMotionValue, animate } from "framer-motion";
 import { toast } from "sonner";
-import { Spade, RotateCcw, Zap, Loader2, Target, CheckCircle2, XCircle, Share2, Link2, FileText, Camera } from "lucide-react";
+import { Spade, RotateCcw, Zap, Loader2, Target, CheckCircle2, XCircle, Share2, Link2, FileText, Camera, Upload } from "lucide-react";
 import { CardSelector } from "../components/CardSelector";
 import { MetricCard } from "../components/MetricCard";
+import { CameraCapture } from "../components/CameraCapture";
 import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
 import { DEFAULT_HAND, cardId, validateHand, encodeHand, decodeHand } from "../lib/cards";
 import { evaluateHand, recognizeCards } from "../lib/api";
@@ -47,6 +48,7 @@ export default function Evaluator() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const debounceRef = useRef(null);
   const fileRef = useRef(null);
 
@@ -119,6 +121,10 @@ export default function Evaluator() {
       toast.error("Image is too large. Please use a photo under 8 MB.");
       return;
     }
+    processImage(file);
+  };
+
+  const processImage = async (file) => {
     setScanning(true);
     const t = toast.loading("Reading your cards\u2026");
     try {
@@ -210,8 +216,17 @@ export default function Evaluator() {
                   disabled={scanning}
                   className="inline-flex items-center gap-2 rounded-full border border-[#d4af37]/40 bg-[#d4af37]/10 px-6 py-3 text-sm font-semibold text-[#d4af37] transition-colors hover:bg-[#d4af37]/20 disabled:opacity-40"
                 >
-                  {scanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Camera className="w-4 h-4" />}
-                  Scan photo
+                  {scanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                  Upload photo
+                </button>
+                <button
+                  data-testid="camera-btn"
+                  onClick={() => setCameraOpen(true)}
+                  disabled={scanning}
+                  className="inline-flex items-center gap-2 rounded-full border border-[#d4af37]/40 bg-[#d4af37]/10 px-6 py-3 text-sm font-semibold text-[#d4af37] transition-colors hover:bg-[#d4af37]/20 disabled:opacity-40"
+                >
+                  <Camera className="w-4 h-4" />
+                  Use camera
                 </button>
                 <Popover>
                   <PopoverTrigger asChild>
@@ -385,6 +400,7 @@ export default function Evaluator() {
           )}
         </AnimatePresence>
       </div>
+      <CameraCapture open={cameraOpen} onOpenChange={setCameraOpen} onCapture={processImage} />
     </div>
   );
 }
