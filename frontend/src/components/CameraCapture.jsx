@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "./ui/dialog";
 import { Camera, CameraOff, RefreshCw } from "lucide-react";
 
 export const CameraCapture = ({ open, onOpenChange, onCapture }) => {
@@ -73,6 +73,9 @@ export const CameraCapture = ({ open, onOpenChange, onCapture }) => {
             <Camera className="w-5 h-5 text-[#d4af37]" />
             Snap your four cards
           </DialogTitle>
+          <DialogDescription className="text-zinc-500">
+            Capture a photo of your four cards and we'll read the ranks and suits automatically.
+          </DialogDescription>
         </DialogHeader>
 
         {error ? (
