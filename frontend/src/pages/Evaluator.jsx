@@ -141,7 +141,7 @@ export default function Evaluator() {
   const banner = result ? BANNER[result.action.banner] : BANNER.good;
 
   return (
-    <div className="min-h-screen relative noise-overlay">
+    <div className="min-h-screen relative noise-overlay overflow-x-hidden">
       {/* atmospheric radial background */}
       <div
         className="pointer-events-none fixed inset-0 z-0"
@@ -150,7 +150,7 @@ export default function Evaluator() {
             "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(16,185,129,0.08), transparent 60%), radial-gradient(ellipse 60% 40% at 90% 10%, rgba(212,175,55,0.06), transparent 55%)",
         }}
       />
-      <div className="relative z-10 mx-auto max-w-6xl px-5 sm:px-8 py-8">
+      <div className="relative z-10 mx-auto max-w-6xl px-4 sm:px-8 py-8">
         {/* Header */}
         <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-10">
           <div className="flex items-center gap-3">
@@ -172,9 +172,9 @@ export default function Evaluator() {
         </header>
 
         {/* Hero: card selection */}
-        <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-sm p-6 sm:p-8 mb-6">
+        <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-sm p-4 sm:p-8 mb-6">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-8">
-            <div className="max-w-sm">
+            <div className="max-w-sm w-full">
               <span className="text-[10px] uppercase tracking-[0.3em] text-[#d4af37] font-semibold">
                 Pre-flop analysis
               </span>
@@ -266,7 +266,7 @@ export default function Evaluator() {
                 </Popover>
               </div>
             </div>
-            <div className="flex justify-center lg:justify-end gap-3 sm:gap-4">
+            <div className="flex justify-center lg:justify-end gap-2 sm:gap-4 flex-shrink-0">
               {cards.map((card, i) => (
                 <CardSelector key={i} card={card} index={i} onChange={(n) => updateCard(i, n)} usedIds={usedIds} />
               ))}
