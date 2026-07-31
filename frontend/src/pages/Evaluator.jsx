@@ -115,6 +115,10 @@ export default function Evaluator() {
       toast.error("Please upload a JPEG, PNG, or WEBP image.");
       return;
     }
+    if (file.size > 8 * 1024 * 1024) {
+      toast.error("Image is too large. Please use a photo under 8 MB.");
+      return;
+    }
     setScanning(true);
     const t = toast.loading("Reading your cards\u2026");
     try {
