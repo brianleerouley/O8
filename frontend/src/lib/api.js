@@ -16,3 +16,12 @@ export async function recognizeCards(file) {
   });
   return data.cards;
 }
+
+export async function scanFrame(file) {
+  const form = new FormData();
+  form.append("file", file);
+  const { data } = await axios.post(`${API}/scan-frame`, form, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return data.cards;
+}

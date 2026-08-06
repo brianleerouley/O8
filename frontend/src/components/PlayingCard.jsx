@@ -2,12 +2,39 @@ import { motion } from "framer-motion";
 import { SUIT_MAP } from "../lib/cards";
 
 export const PlayingCard = ({ card, index = 0, size = "lg", selected = false }) => {
-  const suit = SUIT_MAP[card.suit];
+  const suit = SUIT_MAP[card?.suit];
   const isRed = suit?.color === "red";
+  const faceUp = Boolean(card?.rank && card?.suit);
   const dims =
     size === "lg"
       ? "w-[64px] h-[92px] sm:w-[104px] sm:h-[148px] text-[13px] sm:text-[15px]"
       : "w-16 h-24 text-xs";
+
+  if (!faceUp) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 24, rotateY: -18 }}
+        animate={{ opacity: 1, y: 0, rotateY: 0 }}
+        transition={{ delay: index * 0.06, type: "spring", stiffness: 220, damping: 20 }}
+        className={`relative ${dims} rounded-xl shadow-[0_10px_30px_-8px_rgba(0,0,0,0.7)] select-none overflow-hidden ${
+          selected ? "ring-2 ring-[#d4af37]" : ""
+        }`}
+        style={{ background: "linear-gradient(135deg,#7f1d1d,#450a0a)" }}
+      >
+        <div className="absolute inset-1.5 rounded-lg border border-[#d4af37]/40" />
+        <div
+          className="absolute inset-2.5 rounded-md opacity-70"
+          style={{
+            backgroundImage:
+              "repeating-linear-gradient(45deg, rgba(212,175,55,0.35) 0 4px, transparent 4px 8px), repeating-linear-gradient(-45deg, rgba(212,175,55,0.25) 0 4px, transparent 4px 8px)",
+          }}
+        />
+        <div className="absolute inset-0 grid place-items-center">
+          <span className="font-head text-[#d4af37] text-lg sm:text-2xl font-extrabold">O8</span>
+        </div>
+      </motion.div>
+    );
+  }
 
   return (
     <motion.div

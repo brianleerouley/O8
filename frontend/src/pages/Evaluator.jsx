@@ -1,18 +1,34 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence, useMotionValue, animate } from "framer-motion";
 import { toast } from "sonner";
-import { Spade, RotateCcw, Zap, Loader2, Target, CheckCircle2, XCircle, Share2, Link2, FileText, Camera, Upload } from "lucide-react";
+import { Spade, RotateCcw, Loader2, Target, CheckCircle2, XCircle, Camera, Upload } from "lucide-react";
 import { CardSelector } from "../components/CardSelector";
 import { MetricCard } from "../components/MetricCard";
 import { CameraCapture } from "../components/CameraCapture";
-import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
-import { DEFAULT_HAND, cardId, validateHand, encodeHand, decodeHand } from "../lib/cards";
+import { DEFAULT_HAND, EMPTY_HAND, cardId, validateHand, encodeHand, decodeHand } from "../lib/cards";
 import { evaluateHand, recognizeCards } from "../lib/api";
 
-const BANNER = {
-  good: { chip: "bg-[#d4af37] text-zinc-900", glow: "shadow-[0_0_60px_-12px_rgba(212,175,55,0.5)]", accent: "text-[#d4af37]" },
-  warn: { chip: "bg-amber-500 text-zinc-900", glow: "shadow-[0_0_50px_-14px_rgba(245,158,11,0.5)]", accent: "text-amber-400" },
-  bad: { chip: "bg-rose-600 text-white", glow: "shadow-[0_0_50px_-14px_rgba(225,29,72,0.5)]", accent: "text-rose-400" },
+const scoreBand = (total) => (total <= 3 ? "red" : total <= 6 ? "gold" : "green");
+
+const BAND = {
+  green: {
+    chip: "bg-emerald-500 text-zinc-900",
+    glow: "shadow-[0_0_60px_-12px_rgba(16,185,129,0.5)]",
+    accent: "text-emerald-400",
+    grad: "from-emerald-500 to-emerald-400",
+  },
+  gold: {
+    chip: "bg-[#d4af37] text-zinc-900",
+    glow: "shadow-[0_0_60px_-12px_rgba(212,175,55,0.5)]",
+    accent: "text-[#d4af37]",
+    grad: "from-[#d4af37] to-amber-300",
+  },
+  red: {
+    chip: "bg-rose-600 text-white",
+    glow: "shadow-[0_0_50px_-14px_rgba(225,29,72,0.5)]",
+    accent: "text-rose-400",
+    grad: "from-rose-500 to-rose-400",
+  },
 };
 
 const AnimatedNumber = ({ value }) => {
@@ -85,29 +101,20 @@ export default function Evaluator() {
     setCards((prev) => prev.map((c, idx) => (idx === i ? next : c)));
   };
 
-  const reset = () => {
-    setCards(DEFAULT_HAND);
-    toast.success("Example hand restored.");
+  const clear = () => {
+    setCards(EMPTY_HAND);
+    setResult(null);
+    setCameraOpen(false);
+    window.history.replaceState(null, "", window.location.pathname);
+    toast.success("Cleared — ready for a new hand.");
   };
 
-  // Keep the address bar in sync so the current hand is always shareable.
+  // Keep the address bar in sync with the current hand (shareable/bookmarkable).
   useEffect(() => {
     if (!validation.ready) return;
     window.history.replaceState(null, "", `${window.location.pathname}?hand=${encodeHand(cards)}`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(cards)]);
-
-  const shareLink = () => {
-    const url = `${window.location.origin}${window.location.pathname}?hand=${encodeHand(cards)}`;
-    navigator.clipboard.writeText(url).then(() => toast.success("Share link copied to clipboard."));
-  };
-
-  const shareSummary = () => {
-    if (!result) return;
-    const hand = result.cards.map((c) => `${c.rank}${c.symbol}`).join(" ");
-    const text = `${hand} \u2192 ${result.action.action} (${result.total}/${result.max_total}), ${result.plan}, ${result.scoop.label} scoop`;
-    navigator.clipboard.writeText(text).then(() => toast.success("Hand summary copied."));
-  };
 
   const onPhotoSelected = async (e) => {
     const file = e.target.files?.[0];
@@ -138,7 +145,25 @@ export default function Evaluator() {
     }
   };
 
-  const banner = result ? BANNER[result.action.banner] : BANNER.good;
+  const onScanDetected = (detected) => {
+    setCards(detected);
+    toast.success("Hand locked in! Scored automatically.");
+  };
+
+  const onScanExpired = (partial) => {
+    if (partial && partial.length > 0) {
+      setCards((prev) => {
+        const next = [...EMPTY_HAND];
+        partial.slice(0, 4).forEach((c, i) => (next[i] = c));
+        return next;
+      });
+      toast(`Time's up — read ${partial.length} of 4. Finish the rest by hand.`);
+    } else {
+      toast("No cards read. Try again or enter them manually.");
+    }
+  };
+
+  const band = result ? BAND[scoreBand(result.total)] : BAND.gold;
 
   return (
     <div className="min-h-screen relative noise-overlay overflow-x-hidden">
@@ -182,25 +207,17 @@ export default function Evaluator() {
                 Should you play this hand?
               </h2>
               <p className="text-sm text-zinc-400 mt-3 leading-relaxed">
-                Pick four cards. We grade the low, the high, how the cards fit, and the trap risk — then tell you whether to raise, play, or fold.
+                Scan your four cards with the camera, or tap each card to set it by hand. Scoring runs automatically the moment all four cards are set.
               </p>
               <div className="flex flex-wrap gap-3 mt-6">
                 <button
-                  data-testid="evaluate-btn"
-                  onClick={() => runEvaluate(cards)}
-                  disabled={loading || !validation.ready}
+                  data-testid="camera-btn"
+                  onClick={() => setCameraOpen(true)}
+                  disabled={scanning}
                   className="inline-flex items-center gap-2 rounded-full bg-[#d4af37] px-6 py-3 text-sm font-bold text-zinc-900 transition-all hover:scale-105 hover:shadow-[0_0_30px_-6px_rgba(212,175,55,0.6)] disabled:opacity-40 disabled:hover:scale-100"
                 >
-                  {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-                  Evaluate hand
-                </button>
-                <button
-                  data-testid="reset-btn"
-                  onClick={reset}
-                  className="inline-flex items-center gap-2 rounded-full border border-zinc-700 px-6 py-3 text-sm font-semibold text-zinc-300 transition-colors hover:bg-zinc-800"
-                >
-                  <RotateCcw className="w-4 h-4" />
-                  Reset
+                  <Camera className="w-4 h-4" />
+                  Scan my hand
                 </button>
                 <input
                   ref={fileRef}
@@ -220,51 +237,17 @@ export default function Evaluator() {
                   Upload photo
                 </button>
                 <button
-                  data-testid="camera-btn"
-                  onClick={() => setCameraOpen(true)}
-                  disabled={scanning}
-                  className="inline-flex items-center gap-2 rounded-full border border-[#d4af37]/40 bg-[#d4af37]/10 px-6 py-3 text-sm font-semibold text-[#d4af37] transition-colors hover:bg-[#d4af37]/20 disabled:opacity-40"
+                  data-testid="clear-btn"
+                  onClick={clear}
+                  className="inline-flex items-center gap-2 rounded-full border border-zinc-700 px-6 py-3 text-sm font-semibold text-zinc-300 transition-colors hover:bg-zinc-800"
                 >
-                  <Camera className="w-4 h-4" />
-                  Use camera
+                  <RotateCcw className="w-4 h-4" />
+                  Clear
                 </button>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <button
-                      data-testid="share-btn"
-                      disabled={!validation.ready}
-                      className="inline-flex items-center gap-2 rounded-full border border-zinc-700 px-6 py-3 text-sm font-semibold text-zinc-300 transition-colors hover:bg-zinc-800 disabled:opacity-40"
-                    >
-                      <Share2 className="w-4 h-4" />
-                      Share
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent align="start" className="w-60 bg-zinc-900 border-zinc-700 text-zinc-100 p-2">
-                    <button
-                      data-testid="share-link-btn"
-                      onClick={shareLink}
-                      className="w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm hover:bg-zinc-800 transition-colors"
-                    >
-                      <Link2 className="w-4 h-4 text-[#d4af37]" />
-                      <span className="text-left">
-                        <span className="block font-semibold">Copy link</span>
-                        <span className="block text-xs text-zinc-500">Loads this exact hand</span>
-                      </span>
-                    </button>
-                    <button
-                      data-testid="share-summary-btn"
-                      onClick={shareSummary}
-                      className="w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm hover:bg-zinc-800 transition-colors"
-                    >
-                      <FileText className="w-4 h-4 text-[#d4af37]" />
-                      <span className="text-left">
-                        <span className="block font-semibold">Copy summary</span>
-                        <span className="block text-xs text-zinc-500">Hand + verdict as text</span>
-                      </span>
-                    </button>
-                  </PopoverContent>
-                </Popover>
               </div>
+              <p className="text-xs text-zinc-600 mt-4">
+                Tip: after scanning, tap any card to correct a misread.
+              </p>
             </div>
             <div className="flex justify-center lg:justify-end gap-2 sm:gap-4 flex-shrink-0">
               {cards.map((card, i) => (
@@ -288,18 +271,18 @@ export default function Evaluator() {
               <div className="lg:col-span-2 flex flex-col gap-6">
                 <div
                   data-testid="decision-panel"
-                  className={`rounded-2xl border border-zinc-800 bg-zinc-900/60 p-7 ${banner.glow}`}
+                  className={`rounded-2xl border border-zinc-800 bg-zinc-900/60 p-7 ${band.glow}`}
                 >
                   <div className="flex items-center justify-between flex-wrap gap-3">
                     <span
                       data-testid="recommendation-chip"
-                      className={`inline-flex rounded-full px-4 py-1.5 text-xs font-bold uppercase tracking-widest ${banner.chip}`}
+                      className={`inline-flex rounded-full px-4 py-1.5 text-xs font-bold uppercase tracking-widest ${band.chip}`}
                     >
                       {result.action.chip}
                     </span>
                     <span className="text-xs text-zinc-500 font-mono">Total {result.total}/{result.max_total}</span>
                   </div>
-                  <h3 className="font-head text-3xl font-extrabold tracking-tight mt-4">
+                  <h3 className={`font-head text-3xl font-extrabold tracking-tight mt-4 ${band.accent}`}>
                     {result.action.title}
                   </h3>
                   <p data-testid="reasoning-text" className="text-sm text-zinc-400 mt-3 leading-relaxed max-w-2xl">
@@ -308,7 +291,7 @@ export default function Evaluator() {
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6">
                     <ScoreBox label="Total score" testid="score-total">
-                      <span className={`font-head text-3xl font-extrabold ${banner.accent}`}>
+                      <span className={`font-head text-3xl font-extrabold ${band.accent}`}>
                         <AnimatedNumber value={result.total} />
                         <span className="text-zinc-600 text-lg">/{result.max_total}</span>
                       </span>
@@ -400,7 +383,12 @@ export default function Evaluator() {
           )}
         </AnimatePresence>
       </div>
-      <CameraCapture open={cameraOpen} onOpenChange={setCameraOpen} onCapture={processImage} />
+      <CameraCapture
+        open={cameraOpen}
+        onOpenChange={setCameraOpen}
+        onDetected={onScanDetected}
+        onExpire={onScanExpired}
+      />
     </div>
   );
 }

@@ -394,6 +394,58 @@ async def recognize_cards(file: UploadFile = File(...)):
     return {"cards": cards}
 
 
+SCAN_PROMPT = (
+    "You are a playing-card recognizer looking at a live camera frame. "
+    "Identify every playing card you can read CONFIDENTLY (there may be zero to four). "
+    "Respond with ONLY valid JSON, no markdown: "
+    '{"cards":[{"rank":"A","suit":"S"}]}. '
+    "rank must be one of: A, K, Q, J, 10, 9, 8, 7, 6, 5, 4, 3, 2 (use \"10\" for ten). "
+    "suit must be one of: S (spades), H (hearts), D (diamonds), C (clubs). "
+    "Only include a card if you are sure of both its rank and suit. "
+    "It is fine to return fewer than four cards, or an empty list, if you are unsure."
+)
+
+
+@api_router.post("/scan-frame")
+async def scan_frame(file: UploadFile = File(...)):
+    """Lenient single-frame recognizer for live camera scanning (returns 0-4 cards)."""
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(status_code=500, detail="LLM key not configured on the server.")
+    if file.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(status_code=400, detail="Unsupported image type.")
+
+    image_bytes = await file.read()
+    if not image_bytes:
+        return {"cards": [], "count": 0}
+    image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"card-scan-{uuid.uuid4()}",
+        system_message="You extract structured data from images and reply with JSON only.",
+    ).with_model("openai", "gpt-5.4")
+
+    try:
+        response = await chat.send_message(
+            UserMessage(text=SCAN_PROMPT, file_contents=[ImageContent(image_base64=image_b64)])
+        )
+        cards = _parse_cards_json(response)
+    except Exception as e:
+        logger.error(f"scan-frame error: {e}")
+        return {"cards": [], "count": 0}
+
+    # Dedupe while preserving order, cap at 4
+    seen, unique = set(), []
+    for c in cards:
+        cid = f"{c['rank']}{c['suit']}"
+        if cid not in seen:
+            seen.add(cid)
+            unique.append(c)
+        if len(unique) == 4:
+            break
+    return {"cards": unique, "count": len(unique)}
+
+
 app.include_router(api_router)
 
 app.add_middleware(

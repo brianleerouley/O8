@@ -40,9 +40,19 @@ export function decodeHand(str) {
   return cards;
 }
 
+export const EMPTY_HAND = [
+  { rank: null, suit: null },
+  { rank: null, suit: null },
+  { rank: null, suit: null },
+  { rank: null, suit: null },
+];
+
+export const isSet = (c) => Boolean(c && c.rank && c.suit);
+
 export function validateHand(cards) {
-  const ids = cards.map(cardId);
-  const complete = cards.length === 4 && cards.every((c) => c.rank && c.suit);
+  const setCards = cards.filter(isSet);
+  const complete = cards.length === 4 && setCards.length === 4;
+  const ids = setCards.map(cardId);
   const unique = new Set(ids).size === ids.length;
   return { complete, unique, ready: complete && unique };
 }
