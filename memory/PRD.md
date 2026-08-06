@@ -32,6 +32,7 @@ play/fold recommendation.
 - Tested: 11/11 backend pytest + full frontend flow, 100% pass.
 
 ## Backlog
-- P1: Save/share evaluated hands (would require enabling MongoDB persistence).
+- P1: Hand history — log camera-scanned hands to MongoDB (user deferred; next up).
+- P1: Save/share evaluated hands (URL hand-loading retained; Share UI removed per spec).
 - P2: Position-aware recommendations (early/late position adjustments).
 - P2: Range/equity simulation against random opponents.
