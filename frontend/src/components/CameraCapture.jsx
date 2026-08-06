@@ -54,6 +54,7 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
         if (file && activeRef.current) {
           try {
             const cards = await scanFrame(file);
+            if (!activeRef.current) return;
             const seen = new Set();
             const unique = [];
             for (const c of cards) {

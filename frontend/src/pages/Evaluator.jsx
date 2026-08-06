@@ -11,6 +11,14 @@ import { evaluateHand, recognizeCards, saveHand, getHands, clearHands } from "..
 
 const scoreBand = (total) => (total <= 3 ? "red" : total <= 6 ? "gold" : "green");
 
+// Safely turn an axios error detail (string OR FastAPI 422 array/object) into a string.
+const errMsg = (err, fallback) => {
+  const d = err?.response?.data?.detail;
+  if (typeof d === "string") return d;
+  if (Array.isArray(d)) return d.map((e) => e?.msg).filter(Boolean).join("; ") || fallback;
+  return fallback;
+};
+
 const BAND = {
   green: {
     chip: "bg-emerald-500 text-zinc-900",
@@ -108,7 +116,7 @@ export default function Evaluator() {
       const data = await evaluateHand(hand);
       setResult(data);
     } catch (e) {
-      toast.error(e?.response?.data?.detail || "Evaluation failed. Try again.");
+      toast.error(errMsg(e, "Evaluation failed. Try again."));
     } finally {
       setLoading(false);
     }
@@ -172,7 +180,7 @@ export default function Evaluator() {
         { id: t }
       );
     } catch (err) {
-      toast.error(err?.response?.data?.detail || "Could not read the cards. Try a clearer photo.", { id: t });
+      toast.error(errMsg(err, "Could not read the cards. Try a clearer photo."), { id: t });
     } finally {
       setScanning(false);
     }
