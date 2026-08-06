@@ -184,22 +184,9 @@ export default function Evaluator() {
     const unsure = detected.filter((c) => c.confidence && c.confidence !== "high").length;
     toast.success(
       unsure > 0
-        ? `Hand locked in — ${unsure} card${unsure > 1 ? "s" : ""} flagged, tap to verify.`
-        : "Hand locked in and scored!"
+        ? `Hand scored — ${unsure} card${unsure > 1 ? "s" : ""} flagged, tap to verify.`
+        : "Hand scored!"
     );
-  };
-
-  const onScanExpired = (partial) => {
-    if (partial && partial.length > 0) {
-      setCards((prev) => {
-        const next = [...EMPTY_HAND];
-        partial.slice(0, 4).forEach((c, i) => (next[i] = c));
-        return next;
-      });
-      toast(`Time's up — read ${partial.length} of 4. Finish the rest by hand.`);
-    } else {
-      toast("No cards read. Try again or enter them manually.");
-    }
   };
 
   const selectHistoryHand = (histCards) => {
@@ -456,7 +443,6 @@ export default function Evaluator() {
         open={cameraOpen}
         onOpenChange={setCameraOpen}
         onDetected={onScanDetected}
-        onExpire={onScanExpired}
       />
     </div>
   );

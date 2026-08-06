@@ -1,0 +1,79 @@
+{
+  "summary": "Iter 7: Validated the NEW HANDS-FREE CONTINUOUS scan feature. Injected navigator.mediaDevices.getUserMedia shim (canvas.captureStream) via add_init_script before goto; also route-intercepted /api/scan-frame with mocked 4-card responses to get deterministic locks (real vision recognition on a synthetic canvas was too noisy). All continuous/toggle/done behaviors verified end-to-end. Confidence-flag + history + no-share + no-overflow regressions still pass. Permission-denied path could not be exercised in the automation browser (see notes) but code path is correct on code review.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_details": {
+    "camera_dialog_structure": {
+      "title 'Hands-free scan'": "PASS",
+      "no countdown text": "PASS (word 'countdown' absent)",
+      "scan-toggle default ON (aria-checked=true)": "PASS",
+      "scan-toggle-row, scan-progress, scan-confirmed, camera-done-btn all present + visible": "PASS",
+      "video element playing (readyState=4, videoWidth=640, srcObject set)": "PASS"
+    },
+    "continuous_auto_capture": {
+      "3s cadence": "PASS — observed 13 scan-frame requests in ~40s (~3.1s spacing) with 200 responses",
+      "confirmed reaches 4/4": "PASS — 'scan-confirmed' text becomes '4 of 4 cards confirmed', all 4 progress segments turn emerald",
+      "scan-last-hand appears with 'Scored: ...' formatted card list": "PASS — e.g. 'Scored: A♠ K♥ 10♦ 7♣'",
+      "card-trigger-1..4 populated with locked cards": "PASS — A♠, K♥, 10♦ (flagged, medium), 7♣",
+      "decision-panel appears WHILE dialog still open": "PASS (dialog count=1, decision-panel count=1)"
+    },
+    "same_hand_dedupe": {
+      "10s of continuous captures of same hand": "PASS — hands count stays at 1 (1→1); dedupe by sorted cardId signature works"
+    },
+    "hand_switch_relogs": {
+      "changing mocked response to a new 4-card hand": "PASS — new lock fires ('Scored: Q♠ J♥ 9♦ 8♣'), hands count 1→2"
+    },
+    "toggle_off_pauses": {
+      "aria-checked flips to false": "PASS",
+      "toggle-row shows 'Paused'": "PASS",
+      "no new logs during 9s of paused scanning even while mock hand changes": "PASS (count unchanged at 2)"
+    },
+    "toggle_on_resumes": {
+      "aria-checked back to true": "PASS",
+      "new lock fires + new history entry created": "PASS (count 2→3)"
+    },
+    "done_closes": {
+      "camera-done-btn click closes dialog": "PASS (dialog count=0)",
+      "camera tracks stopped (video.srcObject nulled)": "PASS"
+    },
+    "permission_denied": {
+      "status": "NOT VERIFIED IN AUTOMATION",
+      "reason": "The Playwright browser's navigator.mediaDevices.getUserMedia could be overridden to RETURN a stream (used successfully in all other tests), but attempts to override it to THROW NotAllowedError did not take effect (verification getUserMedia({video:true}) returned 'ok' instead of throwing). This appears to be a Chromium/Playwright quirk with re-overriding mediaDevices after it has been previously replaced.",
+      "code_review": "PASS — CameraCapture.jsx catches e.name==='NotAllowedError' and renders 'Camera permission denied. Allow camera access and try again.' plus data-testid=camera-retry-btn. Logic is correct."
+    },
+    "regression_upload_flag": {
+      "route-intercept /api/recognize-cards with low+medium confidence": "PASS — flagged-notice reads '2 cards the scanner wasn\\'t sure about'; data-flagged=[false,true,true,false] on card-trigger-1..4"
+    },
+    "regression_clear_and_layout": {
+      "Clear -> card backs (O8 pattern)": "PASS",
+      "no share-btn": "PASS (count=0)",
+      "no horizontal overflow @390px": "PASS (scrollWidth==clientWidth)",
+      "hand-history + clear-history-btn visible": "PASS"
+    }
+  },
+  "critical_code_review_comments": [
+    "CameraCapture.jsx loop() correctly gates capture on scanningRef.current (paused toggle stops NEW captures immediately after next 500ms tick). Good separation of refs vs state.",
+    "Dedupe key uses sorted cardIds join — order-invariant, correct.",
+    "lastLockedRef is reset in start() so a fresh open re-scores even the same hand next session — matches spec.",
+    "MINOR RACE (not observed as failure): if user clicks Done while an in-flight scanFrame() is pending, activeRef.current=false but the response still resolves and calls setConfirmed/setLastHand (Component may be about to unmount). React may warn about state updates on unmounted component in strict mode. Consider guarding with `if (!activeRef.current) return;` after the await in loop().",
+    "MINOR: on re-open after Done, if a previous loop iteration was mid-sleep(3000) when activeRef flipped to false, it will exit correctly (while(activeRef.current) is checked at top of each iter), but a new loop instance starts from start(). Fine, but two independent loops could briefly coexist if timing is unlucky. Consider a generation counter to fully invalidate old loops.",
+    "Evaluator.jsx toast.error on evaluate failure uses err?.response?.data?.detail directly. For 422 responses (list of pydantic error objects), sonner tries to render an object and CRASHES the whole page (observed during a mocked scan-frame test that returned rank 'T' — a real /api/scan-frame normalises T→10 server-side, so this doesn't manifest in prod, but recommend stringifying/guarding detail in toast to prevent full-page crash on any future 422).",
+    "CameraCapture Dialog has no explicit ARIA description prop, but DialogDescription is provided — good.",
+    "Auto-scan default ON matches spec; toggle label + 'Paused'/'Capturing every 3s' subtext is clear UX.",
+    "scan-progress segments animate cleanly; scan-last-hand uses SUIT_MAP symbols consistently."
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_hands.py",
+    "/app/backend/tests/test_recognize.py"
+  ],
+  "action_items": [
+    "(Low-priority hardening) In Evaluator.jsx runEvaluate catch: coerce err.response.data.detail to string before passing to toast.error to prevent 'Objects are not valid as a React child' crashes on 422s.",
+    "(Optional) Guard state updates in CameraCapture loop() with activeRef check after each await to silence potential unmount warnings."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped per request)", "frontend": "100% of new continuous-scan scenarios verified; 1 regression path (permission denied) verified only by code review"},
+  "seed_data_creation": "Wiped /api/hands (DELETE) at start of each test run.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "To reliably test the hands-free continuous loop in Playwright: (1) add_init_script that overrides navigator.mediaDevices.getUserMedia to return canvas.captureStream(15), (2) intercept /api/scan-frame with page.route to return deterministic 4-card JSON — the vision model on a synthetic canvas is too noisy to reliably return 4 cards. GET /api/hands returns {hands:[...]}, not a bare list — extract .hands when counting. Permission-denied path could not be triggered in Chromium after overriding mediaDevices once; consider using Playwright's context.grant_permissions([]) or launching a fresh context with camera permission explicitly denied for that specific test."
+}
