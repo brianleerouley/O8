@@ -24,15 +24,30 @@ play/fold recommendation.
 - Recommendation: Raise/Build (>=7), Play (>=5), Caution (>=3), Fold (<3).
 - Scoop potential label + %, plain-English teaching note, framework formula line.
 
-## Implemented (2026-06)
-- Full evaluation engine with expanded logic (counterfeit protection, double-suited/suited-ace/
-  connectedness high detection, quartering & trap risk, explicit scoop potential metric).
-- Premium dark UI: custom cards, popover selector with duplicate prevention, animated score
-  counter, metric bars, scoop progress bar, teaching panel. All data-testids in place.
-- Tested: 11/11 backend pytest + full frontend flow, 100% pass.
+## Implemented (grows over time)
+- 2026-06: Full evaluation engine with expanded logic (counterfeit protection, double-suited/
+  suited-ace/connectedness high detection, quartering & trap risk, explicit scoop potential).
+  Premium dark "Luxury Noir" UI: custom cards, popover selector w/ duplicate prevention,
+  animated score, metric bars, scoop bar, teaching panel. Tested 100%.
+- 2026-06: URL hand sharing (`?hand=AS-KS-2H-3H`); mobile responsive fix (no overflow 360/390).
+- 2026-06: Photo card recognition — `POST /api/recognize-cards` (upload) + `POST /api/scan-frame`
+  (lenient live) via OpenAI gpt-5.4 vision + Emergent Universal Key. Live camera scanner with
+  15s countdown, "N of 4 confirmed", auto-lock.
+- 2026-06: Scoop Coach spec batch — color score bands (red 0-3 / gold 4-6 / green 7-9),
+  camera-first "Scan my hand" CTA, Clear (card-back placeholders), removed Share + Evaluate.
+- 2026-06: Hand history (`POST/GET/DELETE /api/hands`, MongoDB, camera+upload only, scrollable
+  list, reload/clear) and per-card confidence flags (amber badge on low/medium reads).
 
-## Backlog
-- P2: Practice quiz mode (guess the grade), beginner glossary.
-- P2: Weekly Monte-Carlo valuation refinement; Android distribution.
-- P2: Position-aware recommendations (early/late position adjustments).
-- P2: Range/equity simulation against random opponents.
+## Deployment
+- Deployed to production: https://hand-recommend.emergent.host (user redeploys from preview).
+- Stateless-friendly + no auth (public). To gate to account holders later, add auth then redeploy.
+
+## Backlog / Enhancement options (kept in memory per user request, 2026-06)
+- **Practice Quiz**: show a random hand; user guesses the grade before reveal.
+- **Beginner Glossary**: tap-to-learn definitions (nut low, quartering, scoop, quartered).
+- **History Filters**: filter saved hands by verdict (Fold / Playable / Premium).
+- **Confidence Auto-Focus**: jump to first flagged card for one-tap verification.
+- **Account Login**: Emergent Google auth or JWT to restrict access to account holders.
+- **Position Advice**: early/late seat toggle that adjusts play/fold.
+- **Weekly Monte-Carlo valuation refinement**; **Android distribution** (from transcript, future phases).
+- **Range/equity simulation** against random opponents.
