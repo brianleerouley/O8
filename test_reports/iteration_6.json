@@ -1,0 +1,61 @@
+{
+  "summary": "Iter 6: Validated NEW features — hand history (POST/GET/DELETE /api/hands) and confidence flags on /api/recognize-cards & /api/scan-frame. 11/11 backend pytest tests pass. Frontend E2E via Playwright: route-intercepted recognize-cards to inject low/medium confidence, verified flagged-notice count, data-flagged attributes on card-trigger-2 and card-trigger-4, flag clearing after manual pick, history creation on upload, history-item click reloads hand+rescores, clear-history-btn empties list, manual entry does NOT create history, no share-btn, no horizontal overflow @390px.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_details": {
+    "backend_hands_api": {
+      "POST /api/hands green band (total>=7)": "PASS — A-S K-S 2-H 3-H returned band='green', all required fields present",
+      "POST /api/hands gold band (4<=total<=6)": "PASS — A-S 2-H 5-C K-D returned band='gold', source='upload' preserved",
+      "POST /api/hands red band (total<=3)": "PASS — K-S Q-H 9-C 4-D returned band='red'",
+      "GET /api/hands newest-first + no _id leak": "PASS — timestamps descending, no MongoDB _id in response",
+      "GET /api/hands?limit=500 capped at 100": "PASS — returns <=100",
+      "invalid source normalised to 'camera'": "PASS",
+      "duplicate cards rejected 422": "PASS",
+      "DELETE /api/hands clears + returns {deleted:n}": "PASS"
+    },
+    "backend_confidence_flags": {
+      "recognize-cards": "PASS — real vision model returned 4 cards each with confidence in {high,medium,low}",
+      "scan-frame": "PASS — every card has valid confidence"
+    },
+    "frontend_confidence_flag_ui": {
+      "route interception injects low/medium": "flagged-notice reads '2 cards the scanner wasn\\'t sure about — tap to verify' ✓",
+      "data-flagged attribute": "card-trigger-1=false, 2=true, 3=false, 4=true — matches intercepted response ✓",
+      "manual pick clears flag": "picking rank K + suit H on card 2 set data-flagged=false and flagged-notice dropped to '1 card' ✓"
+    },
+    "frontend_history_ui": {
+      "upload creates history entry": "1 item after set_input_files upload ✓ (via real recognize endpoint)",
+      "history item shows total/9 + chip badge + upload icon": "'A♠K♥5♣2♦ 5/9 · Playable Low-first just now' rendered ✓",
+      "history-item-<id> click reloads hand + re-evaluates": "decision-panel re-appeared after click ✓",
+      "clear-history-btn empties the list": "count 1 → 0 ✓",
+      "manual entry does NOT log": "manual setting of 3 cards (Q-S, J-H, 9-D) kept history count at 1; logHand is only called from onScanDetected/processImage — verified by code + count assertion ✓"
+    },
+    "regression": {
+      "no share-btn": "share-btn count = 0 ✓",
+      "no horizontal overflow @390px": "documentElement.scrollWidth == clientWidth ✓"
+    }
+  },
+  "critical_code_review_comments": [
+    "Backend correctly caps limit at 100 via max(1,min(limit,100)) and excludes _id via projection {'_id':0} — clean.",
+    "SaveHandRequest normalises source to 'camera' if not in whitelist — good defensive default.",
+    "_band mapping matches spec exactly (<=3 red, <=6 gold, else green).",
+    "_parse_cards_json defaults confidence to 'high' when missing or invalid — good defensive fallback that also protects UI from spurious flags.",
+    "CardSelector.pick() sets confidence:'high' on any manual pick — cleanly clears the flag as designed.",
+    "logHand is only invoked from processImage (upload) and onScanDetected (camera). updateCard/manual paths do NOT log, matching spec.",
+    "PlayingCard.jsx applies both amber ring (animate-pulse) and a '?' badge when flagged — accessible dual-signal.",
+    "Minor: /api/hands POST re-runs full evaluate on server (correct/secure); frontend does not blindly trust client totals.",
+    "Minor UX note (not a bug): flagged-notice uses 'card/cards' singular/plural correctly."
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_hands.py",
+    "/app/backend/tests/test_evaluate.py",
+    "/app/backend/tests/test_recognize.py",
+    "/app/test_reports/pytest/hands_results.xml"
+  ],
+  "action_items": [],
+  "updated_files": ["/app/backend/tests/test_hands.py"],
+  "success_rate": {"backend": "100% (11/11 pytest)", "frontend": "100% of critical flows verified"},
+  "seed_data_creation": "Test module wipes /api/hands at setup+teardown; test hands (green/gold/red) are created and cleaned within the module.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Hand history + confidence flag features are fully working end-to-end. During Playwright, once (only once) rank-4-6 popover open timed out after 3 manual cards were set — likely animation/focus race after repeated Escape presses; not a functional bug. If retesting, add a short wait_for_selector on card-popover-<i> after clicking card-trigger-<i>. All spec assertions in the request are validated. Backend tests are in /app/backend/tests/test_hands.py and reusable."
+}

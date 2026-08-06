@@ -7,7 +7,10 @@ import { useState } from "react";
 export const CardSelector = ({ card, index, onChange, usedIds }) => {
   const [open, setOpen] = useState(false);
 
-  const pick = (patch) => onChange({ ...card, ...patch });
+  const flagged = Boolean(card?.rank && card?.suit && card?.confidence && card.confidence !== "high");
+
+  // Any manual pick confirms the card, so clear the confidence flag.
+  const pick = (patch) => onChange({ ...card, ...patch, confidence: "high" });
 
   return (
     <div className="flex flex-col items-center gap-3" data-testid={`card-slot-${index + 1}`}>
@@ -18,11 +21,12 @@ export const CardSelector = ({ card, index, onChange, usedIds }) => {
         <PopoverTrigger asChild>
           <button
             data-testid={`card-trigger-${index + 1}`}
+            data-flagged={flagged ? "true" : "false"}
             className="group relative outline-none focus-visible:ring-2 focus-visible:ring-[#d4af37] rounded-xl transition-transform hover:-translate-y-1"
           >
-            <PlayingCard card={card} index={index} />
+            <PlayingCard card={card} index={index} flagged={flagged} />
             <span className="absolute -bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-0.5 rounded-full bg-zinc-800 border border-zinc-700 px-2 py-0.5 text-[10px] text-zinc-300 opacity-0 group-hover:opacity-100 transition-opacity">
-              edit <ChevronDown className="w-3 h-3" />
+              {flagged ? "verify" : "edit"} <ChevronDown className="w-3 h-3" />
             </span>
           </button>
         </PopoverTrigger>

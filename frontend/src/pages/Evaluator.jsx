@@ -5,8 +5,9 @@ import { Spade, RotateCcw, Loader2, Target, CheckCircle2, XCircle, Camera, Uploa
 import { CardSelector } from "../components/CardSelector";
 import { MetricCard } from "../components/MetricCard";
 import { CameraCapture } from "../components/CameraCapture";
+import { HandHistory } from "../components/HandHistory";
 import { DEFAULT_HAND, EMPTY_HAND, cardId, validateHand, encodeHand, decodeHand } from "../lib/cards";
-import { evaluateHand, recognizeCards } from "../lib/api";
+import { evaluateHand, recognizeCards, saveHand, getHands, clearHands } from "../lib/api";
 
 const scoreBand = (total) => (total <= 3 ? "red" : total <= 6 ? "gold" : "green");
 
@@ -65,11 +66,36 @@ export default function Evaluator() {
   const [loading, setLoading] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [hands, setHands] = useState([]);
   const debounceRef = useRef(null);
   const fileRef = useRef(null);
 
   const usedIds = cards.map(cardId);
   const validation = validateHand(cards);
+
+  const refreshHistory = useCallback(async () => {
+    try {
+      setHands(await getHands(50));
+    } catch (_) {
+      /* history is non-critical */
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshHistory();
+  }, [refreshHistory]);
+
+  const logHand = useCallback(
+    async (detected, source) => {
+      try {
+        await saveHand(detected, source);
+        refreshHistory();
+      } catch (_) {
+        /* logging is best-effort */
+      }
+    },
+    [refreshHistory]
+  );
 
   const runEvaluate = useCallback(async (hand) => {
     const v = validateHand(hand);
@@ -137,7 +163,14 @@ export default function Evaluator() {
     try {
       const detected = await recognizeCards(file);
       setCards(detected);
-      toast.success("Cards detected! Check and adjust if needed.", { id: t });
+      logHand(detected, "upload");
+      const unsure = detected.filter((c) => c.confidence && c.confidence !== "high").length;
+      toast.success(
+        unsure > 0
+          ? `Detected — ${unsure} card${unsure > 1 ? "s" : ""} flagged, tap to verify.`
+          : "Cards detected and scored!",
+        { id: t }
+      );
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Could not read the cards. Try a clearer photo.", { id: t });
     } finally {
@@ -147,7 +180,13 @@ export default function Evaluator() {
 
   const onScanDetected = (detected) => {
     setCards(detected);
-    toast.success("Hand locked in! Scored automatically.");
+    logHand(detected, "camera");
+    const unsure = detected.filter((c) => c.confidence && c.confidence !== "high").length;
+    toast.success(
+      unsure > 0
+        ? `Hand locked in — ${unsure} card${unsure > 1 ? "s" : ""} flagged, tap to verify.`
+        : "Hand locked in and scored!"
+    );
   };
 
   const onScanExpired = (partial) => {
@@ -163,6 +202,23 @@ export default function Evaluator() {
     }
   };
 
+  const selectHistoryHand = (histCards) => {
+    setCards(histCards.map((c) => ({ rank: c.rank, suit: c.suit })));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    toast.success("Loaded hand from history.");
+  };
+
+  const onClearHistory = async () => {
+    try {
+      await clearHands();
+      setHands([]);
+      toast.success("History cleared.");
+    } catch (_) {
+      toast.error("Could not clear history.");
+    }
+  };
+
+  const flaggedCount = cards.filter((c) => c.rank && c.suit && c.confidence && c.confidence !== "high").length;
   const band = result ? BAND[scoreBand(result.total)] : BAND.gold;
 
   return (
@@ -249,10 +305,21 @@ export default function Evaluator() {
                 Tip: after scanning, tap any card to correct a misread.
               </p>
             </div>
-            <div className="flex justify-center lg:justify-end gap-2 sm:gap-4 flex-shrink-0">
-              {cards.map((card, i) => (
-                <CardSelector key={i} card={card} index={i} onChange={(n) => updateCard(i, n)} usedIds={usedIds} />
-              ))}
+            <div className="flex flex-col items-center lg:items-end gap-3 flex-shrink-0">
+              <div className="flex justify-center lg:justify-end gap-2 sm:gap-4">
+                {cards.map((card, i) => (
+                  <CardSelector key={i} card={card} index={i} onChange={(n) => updateCard(i, n)} usedIds={usedIds} />
+                ))}
+              </div>
+              {flaggedCount > 0 && (
+                <p
+                  data-testid="flagged-notice"
+                  className="flex items-center gap-2 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-300"
+                >
+                  <span className="grid place-items-center w-4 h-4 rounded-full bg-amber-400 text-zinc-900 text-[10px] font-extrabold">?</span>
+                  {flaggedCount} card{flaggedCount > 1 ? "s" : ""} the scanner wasn't sure about — tap to verify.
+                </p>
+              )}
             </div>
           </div>
         </section>
@@ -382,6 +449,8 @@ export default function Evaluator() {
             </motion.div>
           )}
         </AnimatePresence>
+
+        <HandHistory hands={hands} onSelect={selectHistoryHand} onClear={onClearHistory} />
       </div>
       <CameraCapture
         open={cameraOpen}

@@ -7,6 +7,7 @@ import json
 import base64
 import logging
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from pydantic import BaseModel, field_validator
 from typing import List, Dict, Any
@@ -318,12 +319,16 @@ RECOGNIZE_PROMPT = (
     "You are a playing-card recognizer. The image shows exactly four playing cards. "
     "Identify each card's rank and suit, reading left to right. "
     "Respond with ONLY valid JSON, no markdown, in this exact shape: "
-    '{"cards":[{"rank":"A","suit":"S"},{"rank":"K","suit":"H"},'
-    '{"rank":"10","suit":"D"},{"rank":"7","suit":"C"}]}. '
+    '{"cards":[{"rank":"A","suit":"S","confidence":"high"},{"rank":"K","suit":"H","confidence":"low"},'
+    '{"rank":"10","suit":"D","confidence":"high"},{"rank":"7","suit":"C","confidence":"medium"}]}. '
     "rank must be one of: A, K, Q, J, 10, 9, 8, 7, 6, 5, 4, 3, 2 (use \"10\" for ten). "
     "suit must be one of: S (spades), H (hearts), D (diamonds), C (clubs). "
-    "Always return exactly four cards. If a card is unclear, give your best guess."
+    'confidence must be "high", "medium", or "low" and reflect how sure you are about THAT card '
+    "(use low/medium if the card is blurry, partially hidden, or ambiguous). "
+    "Always return exactly four cards. If a card is unclear, give your best guess and mark it low."
 )
+
+CONFIDENCE_LEVELS = {'high', 'medium', 'low'}
 
 
 def _parse_cards_json(text: str) -> List[Dict[str, str]]:
@@ -343,8 +348,11 @@ def _parse_cards_json(text: str) -> List[Dict[str, str]]:
         if rank in ('T', '10'):
             rank = '10'
         suit = str(c.get('suit', '')).upper().strip()[:1]
+        conf = str(c.get('confidence', 'high')).lower().strip()
+        if conf not in CONFIDENCE_LEVELS:
+            conf = 'high'
         if rank in RANK_VALUE and suit in SUITS:
-            result.append({'rank': rank, 'suit': suit})
+            result.append({'rank': rank, 'suit': suit, 'confidence': conf})
     return result
 
 
@@ -398,10 +406,11 @@ SCAN_PROMPT = (
     "You are a playing-card recognizer looking at a live camera frame. "
     "Identify every playing card you can read CONFIDENTLY (there may be zero to four). "
     "Respond with ONLY valid JSON, no markdown: "
-    '{"cards":[{"rank":"A","suit":"S"}]}. '
+    '{"cards":[{"rank":"A","suit":"S","confidence":"high"}]}. '
     "rank must be one of: A, K, Q, J, 10, 9, 8, 7, 6, 5, 4, 3, 2 (use \"10\" for ten). "
     "suit must be one of: S (spades), H (hearts), D (diamonds), C (clubs). "
-    "Only include a card if you are sure of both its rank and suit. "
+    'confidence must be "high", "medium", or "low" for how sure you are of that card. '
+    "Only include a card if you can read it. "
     "It is fine to return fewer than four cards, or an empty list, if you are unsure."
 )
 
@@ -444,6 +453,62 @@ async def scan_frame(file: UploadFile = File(...)):
         if len(unique) == 4:
             break
     return {"cards": unique, "count": len(unique)}
+
+
+# ----------------------------------------------------------------------------
+# Hand history (camera/scan-sourced hands only)
+# ----------------------------------------------------------------------------
+
+def _band(total: int) -> str:
+    return 'red' if total <= 3 else 'gold' if total <= 6 else 'green'
+
+
+class SaveHandRequest(BaseModel):
+    cards: List[Card]
+    source: str = 'camera'
+
+    @field_validator('cards')
+    @classmethod
+    def four_cards(cls, v):
+        if len(v) != 4:
+            raise ValueError('Exactly four cards are required')
+        ids = [f'{c.rank}{c.suit}' for c in v]
+        if len(set(ids)) != len(ids):
+            raise ValueError('Cards must be unique')
+        return v
+
+
+@api_router.post("/hands")
+async def save_hand(req: SaveHandRequest):
+    ev = evaluate_hand(req.cards)
+    record = {
+        'id': str(uuid.uuid4()),
+        'cards': ev['cards'],
+        'total': ev['total'],
+        'action': ev['action']['action'],
+        'chip': ev['action']['chip'],
+        'title': ev['action']['title'],
+        'band': _band(ev['total']),
+        'plan': ev['plan'],
+        'scoop': ev['scoop']['label'],
+        'source': req.source if req.source in ('camera', 'upload') else 'camera',
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+    }
+    await db.hands.insert_one({**record})
+    return record
+
+
+@api_router.get("/hands")
+async def list_hands(limit: int = 50):
+    limit = max(1, min(limit, 100))
+    docs = await db.hands.find({}, {"_id": 0}).sort("timestamp", -1).to_list(limit)
+    return {"hands": docs}
+
+
+@api_router.delete("/hands")
+async def clear_hands():
+    result = await db.hands.delete_many({})
+    return {"deleted": result.deleted_count}
 
 
 app.include_router(api_router)

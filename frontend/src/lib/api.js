@@ -25,3 +25,18 @@ export async function scanFrame(file) {
   });
   return data.cards;
 }
+
+export async function saveHand(cards, source = "camera") {
+  const payload = cards.map((c) => ({ rank: c.rank, suit: c.suit }));
+  const { data } = await axios.post(`${API}/hands`, { cards: payload, source });
+  return data;
+}
+
+export async function getHands(limit = 50) {
+  const { data } = await axios.get(`${API}/hands`, { params: { limit } });
+  return data.hands;
+}
+
+export async function clearHands() {
+  await axios.delete(`${API}/hands`);
+}
