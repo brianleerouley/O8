@@ -98,12 +98,18 @@ export function normalizeComponents(components, sourceWidth, sourceHeight, width
   const bottom = Math.max(...components.map((component) => component.bottom));
   const boxWidth = Math.max(1, right - left + 1);
   const boxHeight = Math.max(1, bottom - top + 1);
+  const padding = 2;
+  const scale = Math.min((width - padding * 2) / boxWidth, (height - padding * 2) / boxHeight);
+  const renderedWidth = boxWidth * scale;
+  const renderedHeight = boxHeight * scale;
+  const offsetX = (width - renderedWidth) / 2;
+  const offsetY = (height - renderedHeight) / 2;
   const output = new Uint8Array(width * height);
   components.forEach((component) => component.pixels.forEach((pixel) => {
     const x = pixel % sourceWidth;
     const y = Math.floor(pixel / sourceWidth);
-    const targetX = Math.min(width - 1, Math.floor(((x - left) / boxWidth) * width));
-    const targetY = Math.min(height - 1, Math.floor(((y - top) / boxHeight) * height));
+    const targetX = Math.min(width - 1, Math.max(0, Math.round(offsetX + (x - left) * scale)));
+    const targetY = Math.min(height - 1, Math.max(0, Math.round(offsetY + (y - top) * scale)));
     output[targetY * width + targetX] = 1;
   }));
   return output;
@@ -149,6 +155,29 @@ export function translatedDiceScore(first, second, width = NORMAL_WIDTH, maxShif
   return best;
 }
 
+export function rotateMask(mask, width = NORMAL_WIDTH, degrees = 0) {
+  if (!degrees) return mask;
+  const height = Math.floor(mask.length / width);
+  const output = new Uint8Array(mask.length);
+  const radians = (-degrees * Math.PI) / 180;
+  const cosine = Math.cos(radians);
+  const sine = Math.sin(radians);
+  const centerX = (width - 1) / 2;
+  const centerY = (height - 1) / 2;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const relativeX = x - centerX;
+      const relativeY = y - centerY;
+      const sourceX = Math.round(relativeX * cosine - relativeY * sine + centerX);
+      const sourceY = Math.round(relativeX * sine + relativeY * cosine + centerY);
+      if (sourceX >= 0 && sourceX < width && sourceY >= 0 && sourceY < height) {
+        output[y * width + x] = mask[sourceY * width + sourceX];
+      }
+    }
+  }
+  return output;
+}
+
 function renderTemplate(text, font) {
   const canvas = document.createElement("canvas");
   canvas.width = 54;
@@ -177,8 +206,18 @@ function getTemplates() {
 }
 
 function matchTemplates(mask, templates) {
+  const variants = [
+    { mask, shift: 2 },
+    { mask: rotateMask(mask, NORMAL_WIDTH, -7), shift: 1 },
+    { mask: rotateMask(mask, NORMAL_WIDTH, 7), shift: 1 },
+  ];
   const scores = templates
-    .map((template) => ({ label: template.label, score: translatedDiceScore(mask, template.mask) }))
+    .map((template) => ({
+      label: template.label,
+      score: Math.max(...variants.map((variant) =>
+        translatedDiceScore(variant.mask, template.mask, NORMAL_WIDTH, variant.shift)
+      )),
+    }))
     .sort((a, b) => b.score - a.score);
   const bestByLabel = [];
   scores.forEach((score) => {
@@ -262,10 +301,12 @@ export function recognizeCornerSamples(first, second) {
   return reconcileSamples(first.map(recognizeCorner), second.map(recognizeCorner));
 }
 
-export function selectFannedCandidates(candidates, count = 4, minimumSpacing = 0.12) {
+export function selectFannedCandidateDetails(candidates, count = 4, minimumSpacing = 0.12) {
   const selected = [];
   [...candidates]
-    .filter((candidate) => candidate?.card?.rank && candidate?.card?.suit)
+    .filter((candidate) =>
+      candidate?.card?.rank && candidate?.card?.suit && candidate.card.confidence !== "low"
+    )
     .sort((first, second) => (second.card.local_score || 0) - (first.card.local_score || 0))
     .forEach((candidate) => {
       if (
@@ -275,31 +316,158 @@ export function selectFannedCandidates(candidates, count = 4, minimumSpacing = 0
         selected.push(candidate);
       }
     });
-  return selected.sort((first, second) => first.x - second.x).map((candidate) => candidate.card);
+  return selected.sort((first, second) => first.x - second.x);
+}
+
+export function selectFannedCandidates(candidates, count = 4, minimumSpacing = 0.12) {
+  return selectFannedCandidateDetails(candidates, count, minimumSpacing).map((candidate) => candidate.card);
+}
+
+function groupBounds(components) {
+  return {
+    left: Math.min(...components.map((component) => component.left)),
+    right: Math.max(...components.map((component) => component.right)),
+    top: Math.min(...components.map((component) => component.top)),
+    bottom: Math.max(...components.map((component) => component.bottom)),
+  };
+}
+
+function glyphComponents(binary) {
+  const analysisBottom = binary.height * 0.72;
+  const minimumHeight = Math.max(7, binary.height * 0.025);
+  const maximumHeight = binary.height * 0.2;
+  const minimumArea = Math.max(10, binary.width * binary.height * 0.00004);
+  return connectedComponents(binary.mask, binary.width, binary.height).filter((component) => {
+    const componentWidth = component.right - component.left + 1;
+    const componentHeight = component.bottom - component.top + 1;
+    const density = component.pixels.length / (componentWidth * componentHeight);
+    return component.top < analysisBottom
+      && componentHeight >= minimumHeight
+      && componentHeight <= maximumHeight
+      && componentWidth >= 2
+      && componentWidth <= binary.width * 0.09
+      && component.pixels.length >= minimumArea
+      && density >= 0.08
+      && density <= 0.9;
+  });
+}
+
+export function buildRankGroups(components, frameWidth) {
+  const ordered = [...components].sort((first, second) => first.left - second.left);
+  const groups = ordered.map((component) => [component]);
+  for (let index = 0; index < ordered.length - 1; index++) {
+    const first = ordered[index];
+    const second = ordered[index + 1];
+    const firstHeight = first.bottom - first.top + 1;
+    const secondHeight = second.bottom - second.top + 1;
+    const overlap = Math.min(first.bottom, second.bottom) - Math.max(first.top, second.top) + 1;
+    const gap = second.left - first.right - 1;
+    if (
+      gap >= 0
+      && gap <= Math.max(frameWidth * 0.012, Math.max(firstHeight, secondHeight) * 0.45)
+      && overlap / Math.min(firstHeight, secondHeight) >= 0.55
+    ) {
+      groups.push([first, second]);
+    }
+  }
+  return groups;
+}
+
+export function suitComponentsBelow(rankComponents, components, frameWidth, frameHeight) {
+  const rank = groupBounds(rankComponents);
+  const rankCenter = (rank.left + rank.right) / 2;
+  const rankWidth = rank.right - rank.left + 1;
+  const rankHeight = rank.bottom - rank.top + 1;
+  return components
+    .filter((component) => {
+      if (rankComponents.includes(component)) return false;
+      const center = (component.left + component.right) / 2;
+      const gap = component.top - rank.bottom;
+      const height = component.bottom - component.top + 1;
+      return gap >= Math.max(1, rankHeight * 0.04)
+        && gap <= Math.max(frameHeight * 0.16, rankHeight * 3)
+        && Math.abs(center - rankCenter) <= Math.max(frameWidth * 0.04, rankWidth * 1.4)
+        && height >= rankHeight * 0.45
+        && height <= rankHeight * 2.1;
+    })
+    .sort((first, second) => {
+      const firstCenter = (first.left + first.right) / 2;
+      const secondCenter = (second.left + second.right) / 2;
+      const firstDistance = first.top - rank.bottom + Math.abs(firstCenter - rankCenter) * 1.5;
+      const secondDistance = second.top - rank.bottom + Math.abs(secondCenter - rankCenter) * 1.5;
+      return firstDistance - secondDistance;
+    });
+}
+
+function classifyComponents(components, binary, templates) {
+  return matchTemplates(
+    normalizeComponents(components, binary.width, binary.height),
+    templates
+  );
 }
 
 export function recognizeFannedCardFrame(canvas) {
   const width = canvas.width;
   const height = canvas.height;
-  if (!width || !height) return [];
-  const windowWidth = Math.max(72, Math.round(width * 0.22));
-  const windowHeight = Math.max(96, Math.round(height * 0.9));
-  const maxX = Math.max(0, width - windowWidth);
-  const step = Math.max(1, maxX / 12);
-  const yPositions = [0, Math.max(0, height - windowHeight)];
+  if (!width || !height) return { cards: [], debug: { rank_candidate_count: 0, candidates: [] } };
+  const context = canvas.getContext("2d", { alpha: false });
+  const binary = imageDataToMask(context.getImageData(0, 0, width, height));
+  const components = glyphComponents(binary);
+  const rankGroups = buildRankGroups(components, width);
+  const templates = getTemplates();
   const candidates = [];
+  const rankCandidates = [];
 
-  for (let x = 0; x <= maxX + 0.5; x += step) {
-    for (const y of yPositions) {
-      const corner = document.createElement("canvas");
-      corner.width = 72;
-      corner.height = 96;
-      const context = corner.getContext("2d", { alpha: false });
-      context.drawImage(canvas, x, y, windowWidth, windowHeight, 0, 0, corner.width, corner.height);
-      const card = recognizeCorner(context.getImageData(0, 0, corner.width, corner.height));
-      if (card) candidates.push({ x: (x + windowWidth / 2) / width, card });
-    }
-  }
+  rankGroups.forEach((rankComponents) => {
+    const rank = classifyComponents(rankComponents, binary, templates.ranks);
+    if (!rank.label || rank.score < 0.46 || rank.margin < 0.02) return;
+    const rankBox = groupBounds(rankComponents);
+    rankCandidates.push({
+      x: ((rankBox.left + rankBox.right) / 2) / width,
+      rank: rank.label,
+      score: rank.score,
+    });
+    const suits = suitComponentsBelow(rankComponents, components, width, height).slice(0, 4);
+    suits.forEach((suitComponent) => {
+      const suit = classifyComponents([suitComponent], binary, templates.suits);
+      const weakestScore = Math.min(rank.score, suit.score);
+      const weakestMargin = Math.min(rank.margin, suit.margin);
+      if (!suit.label || weakestScore < 0.48 || weakestMargin < 0.02) return;
+      const confidence = weakestScore >= 0.62 && weakestMargin >= 0.05 ? "high" : "medium";
+      candidates.push({
+        x: ((rankBox.left + rankBox.right) / 2) / width,
+        rank_box: rankBox,
+        card: {
+          rank: rank.label,
+          suit: suit.label,
+          confidence,
+          local_score: Number(weakestScore.toFixed(3)),
+          rank_score: Number(rank.score.toFixed(3)),
+          suit_score: Number(suit.score.toFixed(3)),
+        },
+      });
+    });
+  });
 
-  return selectFannedCandidates(candidates);
+  const selected = selectFannedCandidateDetails(candidates, 4, 0.1);
+  return {
+    cards: selected.map((candidate) => candidate.card),
+    debug: {
+      rank_candidate_count: rankCandidates.length,
+      rank_candidates: rankCandidates.map((candidate) => ({
+        x: Number(candidate.x.toFixed(3)),
+        rank: candidate.rank,
+        score: Number(candidate.score.toFixed(3)),
+      })),
+      candidate_x_positions: selected.map((candidate) => Number(candidate.x.toFixed(3))),
+      candidates: selected.map((candidate) => ({
+        x: Number(candidate.x.toFixed(3)),
+        rank: candidate.card.rank,
+        suit: candidate.card.suit,
+        rank_score: candidate.card.rank_score,
+        suit_score: candidate.card.suit_score,
+        confidence: candidate.card.confidence,
+      })),
+    },
+  };
 }

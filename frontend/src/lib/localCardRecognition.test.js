@@ -1,11 +1,14 @@
 import {
+  buildRankGroups,
   connectedComponents,
   diceScore,
   imageDataToMask,
   normalizeComponents,
   otsuThreshold,
   reconcileSamples,
+  rotateMask,
   selectFannedCandidates,
+  suitComponentsBelow,
   translatedDiceScore,
 } from "./localCardRecognition";
 
@@ -94,4 +97,69 @@ test("fanned candidate selection leaves unresolved positions for manual correcti
     { x: 0.7, card: { rank: "K", suit: "D", local_score: 0.7 } },
   ]);
   expect(cards).toHaveLength(2);
+});
+
+const rectangleComponent = (left, top, right, bottom, sourceWidth = 400) => {
+  const pixels = [];
+  for (let y = top; y <= bottom; y++) {
+    for (let x = left; x <= right; x++) pixels.push(y * sourceWidth + x);
+  }
+  return { left, top, right, bottom, pixels };
+};
+
+test("rank grouping preserves four uneven left-to-right positions", () => {
+  const components = [
+    rectangleComponent(12, 20, 24, 48),
+    rectangleComponent(78, 25, 91, 54),
+    rectangleComponent(173, 31, 187, 61),
+    rectangleComponent(320, 36, 335, 67),
+  ];
+  const singleGroups = buildRankGroups(components, 400).filter((group) => group.length === 1);
+  expect(singleGroups.map((group) => group[0].left)).toEqual([12, 78, 173, 320]);
+});
+
+test("rank grouping joins adjacent glyphs needed for the 10 rank", () => {
+  const one = rectangleComponent(40, 20, 45, 50);
+  const zero = rectangleComponent(48, 20, 64, 50);
+  expect(buildRankGroups([one, zero], 400).some((group) => group.length === 2)).toBe(true);
+});
+
+test("suit pairing stays below its rank across overlapping fanned card boundaries", () => {
+  const rank = rectangleComponent(70, 20, 84, 48);
+  const ownSuit = rectangleComponent(71, 58, 86, 80);
+  const neighboringSuit = rectangleComponent(105, 54, 120, 78);
+  const paired = suitComponentsBelow([rank], [rank, neighboringSuit, ownSuit], 400, 220);
+  expect(paired[0]).toBe(ownSuit);
+  expect(paired).not.toContain(neighboringSuit);
+});
+
+test("normalization preserves a tall glyph aspect ratio with centered padding", () => {
+  const component = rectangleComponent(4, 3, 5, 10, 20);
+  const normalized = normalizeComponents([component], 20, 20, 24, 32);
+  const points = [];
+  normalized.forEach((value, index) => {
+    if (value) points.push({ x: index % 24, y: Math.floor(index / 24) });
+  });
+  const occupiedWidth = Math.max(...points.map((point) => point.x)) - Math.min(...points.map((point) => point.x)) + 1;
+  const occupiedHeight = Math.max(...points.map((point) => point.y)) - Math.min(...points.map((point) => point.y)) + 1;
+  expect(occupiedHeight).toBeGreaterThan(occupiedWidth * 3);
+  expect(Math.min(...points.map((point) => point.x))).toBeGreaterThan(1);
+  expect(Math.max(...points.map((point) => point.x))).toBeLessThan(22);
+});
+
+test("ambiguous low-confidence candidates are rejected instead of filling a slot", () => {
+  const cards = selectFannedCandidates([
+    { x: 0.2, card: { rank: "A", suit: "C", confidence: "medium", local_score: 0.55 } },
+    { x: 0.4, card: { rank: "2", suit: "S", confidence: "low", local_score: 0.49 } },
+  ]);
+  expect(cards.map((card) => `${card.rank}${card.suit}`)).toEqual(["AC"]);
+});
+
+test("small rotation variants preserve glyph pixels for fan-angle matching", () => {
+  const mask = new Uint8Array(24 * 32);
+  for (let y = 8; y < 24; y++) mask[y * 24 + 10] = 1;
+  for (let x = 10; x < 17; x++) mask[23 * 24 + x] = 1;
+  const rotated = rotateMask(mask, 24, 7);
+  expect(rotated.some(Boolean)).toBe(true);
+  expect(diceScore(mask, rotated)).toBeGreaterThan(0.5);
 });
