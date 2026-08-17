@@ -7,11 +7,13 @@ import json
 import base64
 import logging
 import uuid
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from pydantic import BaseModel, field_validator
 from typing import List, Dict, Any
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+from card_recognition import parse_zone_cards_json
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -453,6 +455,58 @@ async def scan_frame(file: UploadFile = File(...)):
         if len(unique) == 4:
             break
     return {"cards": unique, "count": len(unique)}
+
+
+ZONE_SCAN_PROMPT = (
+    "You are reading four fixed playing-card positions from two rapid camera samples. "
+    "Images 1-4 are sample A for card positions 1-4, left to right. "
+    "Images 5-8 are sample B for those same positions 1-4. "
+    "Compare each position's two crops and identify exactly one card per position. "
+    "Respond with ONLY valid JSON, no markdown, shaped as: "
+    '{"cards":[{"rank":"A","suit":"S","confidence":"high","stable_samples":2},null,null,null]}. '
+    "Return exactly four array entries and preserve position order. Use null when unreadable. "
+    "rank must be A, K, Q, J, 10, 9, 8, 7, 6, 5, 4, 3, or 2. "
+    "suit must be S, H, D, or C. confidence must be high, medium, or low. "
+    "Set stable_samples to 2 only when both crops support the same rank and suit; otherwise 1. "
+    "Do not infer a card from another position."
+)
+
+
+@api_router.post("/scan-zones")
+async def scan_zones(files: List[UploadFile] = File(...)):
+    """Recognize four fixed card zones from two successive cropped samples."""
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(status_code=500, detail="LLM key not configured on the server.")
+    if len(files) != 8:
+        raise HTTPException(status_code=400, detail="Expected two samples for each of four card zones.")
+
+    images = []
+    for file in files:
+        if file.content_type not in ALLOWED_IMAGE_TYPES:
+            raise HTTPException(status_code=400, detail="Unsupported card-zone image type.")
+        image_bytes = await file.read()
+        if not image_bytes:
+            raise HTTPException(status_code=400, detail="One or more card-zone images were empty.")
+        images.append(ImageContent(image_base64=base64.b64encode(image_bytes).decode('utf-8')))
+
+    started = time.perf_counter()
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"card-zones-{uuid.uuid4()}",
+        system_message="You extract structured playing-card data from ordered image crops and reply with JSON only.",
+    ).with_model("openai", "gpt-5.4")
+    try:
+        response = await chat.send_message(UserMessage(text=ZONE_SCAN_PROMPT, file_contents=images))
+        cards = parse_zone_cards_json(response)
+    except Exception as exc:
+        logger.error(f"scan-zones error: {exc}")
+        raise HTTPException(status_code=422, detail="Could not stabilize all four card zones.")
+
+    return {
+        "cards": cards,
+        "count": sum(card is not None for card in cards),
+        "latency_ms": round((time.perf_counter() - started) * 1000),
+    }
 
 
 # ----------------------------------------------------------------------------

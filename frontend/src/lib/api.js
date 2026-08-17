@@ -26,6 +26,15 @@ export async function scanFrame(file) {
   return data.cards;
 }
 
+export async function scanCardZones(files) {
+  const form = new FormData();
+  files.forEach((file) => form.append("files", file));
+  const { data } = await axios.post(`${API}/scan-zones`, form, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return data;
+}
+
 export async function saveHand(cards, source = "camera") {
   const payload = cards.map((c) => ({ rank: c.rank, suit: c.suit }));
   const { data } = await axios.post(`${API}/hands`, { cards: payload, source });
