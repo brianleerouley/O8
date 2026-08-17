@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from card_recognition import parse_position_cards_json, parse_zone_cards_json
+from card_recognition import parse_position_cards_json, parse_recognized_hand_json, parse_zone_cards_json
 
 
 class ZoneCardParserTests(unittest.TestCase):
@@ -21,6 +21,43 @@ class ZoneCardParserTests(unittest.TestCase):
         self.assertEqual(cards[2]["suit"], "H")
         self.assertEqual(cards[3]["confidence"], "low")
         self.assertEqual(cards[3]["stable_samples"], 1)
+
+    def test_complete_hand_parser_normalizes_ten(self):
+        cards = parse_recognized_hand_json(json.dumps({'cards': [
+            {'rank': 'A', 'suit': 'S', 'confidence': 'high'},
+            {'rank': 'T', 'suit': 'C', 'confidence': 'medium'},
+            {'rank': '2', 'suit': 'H', 'confidence': 'high'},
+            {'rank': '3', 'suit': 'D', 'confidence': 'high'},
+        ]}))
+        self.assertEqual(cards[1]['rank'], '10')
+
+    def test_complete_hand_parser_accepts_real_world_four_card_hand(self):
+        cards = parse_recognized_hand_json(json.dumps({'cards': [
+            {'rank': 'A', 'suit': 'S', 'confidence': 'high'},
+            {'rank': 'A', 'suit': 'C', 'confidence': 'high'},
+            {'rank': '2', 'suit': 'S', 'confidence': 'high'},
+            {'rank': '3', 'suit': 'C', 'confidence': 'high'},
+        ]}))
+        self.assertEqual(
+            [(card['rank'], card['suit']) for card in cards],
+            [('A', 'S'), ('A', 'C'), ('2', 'S'), ('3', 'C')],
+        )
+
+    def test_complete_hand_parser_rejects_malformed_json(self):
+        with self.assertRaises(json.JSONDecodeError):
+            parse_recognized_hand_json('not json')
+
+    def test_complete_hand_parser_rejects_duplicates(self):
+        payload = {'cards': [
+            {'rank': 'A', 'suit': 'S'}, {'rank': 'A', 'suit': 'S'},
+            {'rank': '2', 'suit': 'H'}, {'rank': '3', 'suit': 'D'},
+        ]}
+        with self.assertRaisesRegex(ValueError, 'unique'):
+            parse_recognized_hand_json(json.dumps(payload))
+
+    def test_complete_hand_parser_rejects_fewer_than_four(self):
+        with self.assertRaisesRegex(ValueError, '4'):
+            parse_recognized_hand_json('{"cards":[{"rank":"A","suit":"S"}]}')
 
     def test_requires_four_positions(self):
         with self.assertRaisesRegex(ValueError, "4"):

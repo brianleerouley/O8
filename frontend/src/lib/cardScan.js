@@ -1,4 +1,7 @@
-import { cardId, EMPTY_HAND } from "./cards";
+import { cardId, EMPTY_HAND, RANKS, SUITS } from "./cards";
+
+const VALID_RANKS = new Set(RANKS);
+const VALID_SUITS = new Set(SUITS.map((suit) => suit.code));
 
 export const CARD_ZONES = [
   { left: 0.04, top: 0.18, width: 0.21, height: 0.64 },
@@ -58,6 +61,20 @@ export function frameSlotsFromCards(cards) {
       locked: confidence === "high",
     };
   });
+}
+
+export function isCompleteUniqueHand(cards) {
+  if (!Array.isArray(cards) || cards.length !== 4) return false;
+  if (!cards.every((card) => VALID_RANKS.has(card?.rank) && VALID_SUITS.has(card?.suit))) return false;
+  return new Set(cards.map(cardId)).size === 4;
+}
+
+export function needsRemoteRecognition(cards) {
+  return !isCompleteUniqueHand(cards) || cards.some((card) => card.confidence !== "high");
+}
+
+export function chooseRecognitionCards(localCards, remoteCards) {
+  return isCompleteUniqueHand(remoteCards) ? remoteCards : localCards;
 }
 
 const matchesNeeded = (confidence) => {
