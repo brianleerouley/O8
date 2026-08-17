@@ -35,3 +35,16 @@ def parse_position_cards_json(text: str, expected: int) -> List[Any]:
 
 def parse_zone_cards_json(text: str) -> List[Any]:
     return parse_position_cards_json(text, 4)
+
+
+def parse_recognized_hand_json(text: str) -> List[Any]:
+    cards = parse_position_cards_json(text, 4)
+    if any(card is None for card in cards):
+        raise ValueError('All four cards must have a valid rank and suit')
+    ids = [f"{card['rank']}{card['suit']}" for card in cards]
+    if len(set(ids)) != 4:
+        raise ValueError('Recognized cards must be unique')
+    return [
+        {'rank': card['rank'], 'suit': card['suit'], 'confidence': card['confidence']}
+        for card in cards
+    ]

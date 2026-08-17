@@ -1,8 +1,10 @@
 import {
+  chooseRecognitionCards,
   EMPTY_SCAN_SLOTS,
   frameSlotsFromCards,
   forceConfirmSlot,
   mapDisplayRectToSource,
+  needsRemoteRecognition,
   scanValidation,
   stabilizeSlots,
   unresolvedFallbackPositions,
@@ -89,4 +91,21 @@ test("single-frame results require uncertain cards to be manually verified", () 
   expect(scanValidation(slots).ready).toBe(false);
   slots[2] = forceConfirmSlot(slots[2], cards[2]);
   expect(scanValidation(slots).ready).toBe(true);
+});
+
+test("remote recognition replaces an incomplete local result", () => {
+  const local = hand.slice(0, 1);
+  expect(needsRemoteRecognition(local)).toBe(true);
+  expect(chooseRecognitionCards(local, hand)).toEqual(hand);
+});
+
+test("duplicate high-confidence local readings still invoke remote recognition", () => {
+  const duplicated = [hand[0], hand[0], hand[2], hand[3]];
+  expect(needsRemoteRecognition(duplicated)).toBe(true);
+});
+
+test("invalid remote results do not replace usable local partial results", () => {
+  const local = hand.slice(0, 2);
+  expect(chooseRecognitionCards(local, [hand[0]])).toEqual(local);
+  expect(chooseRecognitionCards(local, [hand[0], hand[1], hand[2], { rank: "Z", suit: "D" }])).toEqual(local);
 });

@@ -5,7 +5,7 @@ import { Switch } from "./ui/switch";
 import { CardSelector } from "./CardSelector";
 import { recognizeCards } from "../lib/api";
 import { cardId } from "../lib/cards";
-import { EMPTY_SCAN_SLOTS, forceConfirmSlot, frameSlotsFromCards, mapDisplayRectToSource, scanValidation } from "../lib/cardScan";
+import { chooseRecognitionCards, EMPTY_SCAN_SLOTS, forceConfirmSlot, frameSlotsFromCards, mapDisplayRectToSource, needsRemoteRecognition, scanValidation } from "../lib/cardScan";
 import { recognizeFannedCardFrame } from "../lib/localCardRecognition";
 
 export const CAPTURE_GUIDE = { left: 0.04, top: 0.04, width: 0.92, height: 0.72 };
@@ -164,14 +164,14 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
     const localMs = performance.now() - localStarted;
     let fallbackMs = 0;
     let fallbackError = null;
-    const localUncertain = cards.length !== 4 || cards.some((card) => card.confidence !== "high");
+    const localUncertain = needsRemoteRecognition(cards);
 
     if (fallbackEnabled && localUncertain) {
       const fallbackStarted = performance.now();
       try {
         const file = await canvasFile(guide, "fanned-hand.jpg");
         if (!file) throw new Error("Could not encode captured frame.");
-        cards = await recognizeCards(file);
+        cards = chooseRecognitionCards(cards, await recognizeCards(file));
       } catch (err) {
         fallbackError = err?.response?.data?.detail
           || "Remote recognition is unavailable. Correct the cards manually or retake the photo.";
@@ -263,7 +263,7 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2 text-xs text-zinc-400">
                   <Switch checked={fallbackEnabled} onCheckedChange={setFallbackEnabled} />
-                  Optional remote fallback
+                  AI recognition available when needed
                 </div>
                 <div className="flex gap-2 ml-auto">
                   <button onClick={manualEntry} className="rounded-full border border-zinc-700 px-5 py-2.5 text-sm font-semibold hover:bg-zinc-800">

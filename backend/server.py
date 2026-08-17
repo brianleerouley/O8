@@ -3,16 +3,14 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 import os
 import json
-import base64
 import logging
 import uuid
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from pydantic import BaseModel, field_validator
 from typing import List, Dict, Any
-from card_recognition import parse_position_cards_json, parse_zone_cards_json
-from emergent_llm import ImageContent, LlmChat, UserMessage, unavailable_reason
+from card_recognition import parse_position_cards_json, parse_recognized_hand_json, parse_zone_cards_json
+from openai_vision import VisionConfigurationError, openai_api_key, recognize_images
 from persistence import clear_hand_records, list_hand_records, persistence_enabled, save_hand_record
 
 ROOT_DIR = Path(__file__).parent
@@ -320,14 +318,15 @@ async def evaluate(req: EvaluateRequest):
 # Card photo recognition (vision) — extracts 4 cards from an uploaded image
 # ----------------------------------------------------------------------------
 
-EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/jpg', 'image/png', 'image/webp'}
 
 
 def require_remote_recognition():
-    reason = unavailable_reason(EMERGENT_LLM_KEY)
-    if reason:
-        raise HTTPException(status_code=503, detail=reason)
+    if not openai_api_key():
+        raise HTTPException(
+            status_code=503,
+            detail="AI card recognition is not configured. Set OPENAI_API_KEY to enable it.",
+        )
 
 
 RECOGNIZE_PROMPT = (
@@ -381,39 +380,25 @@ async def recognize_cards(file: UploadFile = File(...)):
     image_bytes = await file.read()
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Empty image file.")
-    image_b64 = base64.b64encode(image_bytes).decode('utf-8')
-
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"card-recognize-{uuid.uuid4()}",
-        system_message="You extract structured data from images and reply with JSON only.",
-    ).with_model("openai", "gpt-5.4")
-
     try:
-        response = await chat.send_message(
-            UserMessage(text=RECOGNIZE_PROMPT, file_contents=[ImageContent(image_base64=image_b64)])
+        response, latency_ms = await recognize_images(
+            RECOGNIZE_PROMPT,
+            [(image_bytes, file.content_type)],
         )
-    except Exception as e:
-        logger.error(f"Vision model error: {e}")
+    except VisionConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        logger.error("OpenAI recognition request failed: %s", exc)
         raise HTTPException(status_code=502, detail="The vision model could not process the image.")
 
     try:
-        cards = _parse_cards_json(response)
-    except Exception as e:
-        logger.error(f"Card parse error: {e} | raw: {response!r}")
+        cards = parse_recognized_hand_json(response)
+    except Exception as exc:
+        logger.warning("OpenAI recognition parse failed: %s", exc)
         raise HTTPException(status_code=422,
                             detail="Could not read the cards clearly. Try a sharper, well-lit photo.")
-
-    if len(cards) != 4:
-        raise HTTPException(status_code=422,
-                            detail=f"Expected 4 cards but detected {len(cards)}. Try a clearer photo of all four cards.")
-
-    ids = [f"{c['rank']}{c['suit']}" for c in cards]
-    if len(set(ids)) != 4:
-        raise HTTPException(status_code=422,
-                            detail="Detected duplicate cards. Please retake the photo so all four cards are distinct.")
-
-    return {"cards": cards}
+    logger.info("OpenAI recognition parse succeeded cards=%d latency_ms=%d", len(cards), latency_ms)
+    return {"cards": cards, "latency_ms": latency_ms}
 
 
 SCAN_PROMPT = (
@@ -439,21 +424,13 @@ async def scan_frame(file: UploadFile = File(...)):
     image_bytes = await file.read()
     if not image_bytes:
         return {"cards": [], "count": 0}
-    image_b64 = base64.b64encode(image_bytes).decode('utf-8')
-
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"card-scan-{uuid.uuid4()}",
-        system_message="You extract structured data from images and reply with JSON only.",
-    ).with_model("openai", "gpt-5.4")
-
     try:
-        response = await chat.send_message(
-            UserMessage(text=SCAN_PROMPT, file_contents=[ImageContent(image_base64=image_b64)])
-        )
+        response, _latency_ms = await recognize_images(SCAN_PROMPT, [(image_bytes, file.content_type)])
         cards = _parse_cards_json(response)
-    except Exception as e:
-        logger.error(f"scan-frame error: {e}")
+    except VisionConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        logger.error("scan-frame error: %s", exc)
         return {"cards": [], "count": 0}
 
     # Dedupe while preserving order, cap at 4
@@ -497,25 +474,21 @@ async def scan_zones(files: List[UploadFile] = File(...)):
         image_bytes = await file.read()
         if not image_bytes:
             raise HTTPException(status_code=400, detail="One or more card-zone images were empty.")
-        images.append(ImageContent(image_base64=base64.b64encode(image_bytes).decode('utf-8')))
+        images.append((image_bytes, file.content_type))
 
-    started = time.perf_counter()
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"card-zones-{uuid.uuid4()}",
-        system_message="You extract structured playing-card data from ordered image crops and reply with JSON only.",
-    ).with_model("openai", "gpt-5.4")
     try:
-        response = await chat.send_message(UserMessage(text=ZONE_SCAN_PROMPT, file_contents=images))
+        response, latency_ms = await recognize_images(ZONE_SCAN_PROMPT, images)
         cards = parse_zone_cards_json(response)
+    except VisionConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
-        logger.error(f"scan-zones error: {exc}")
+        logger.error("scan-zones error: %s", exc)
         raise HTTPException(status_code=422, detail="Could not stabilize all four card zones.")
 
     return {
         "cards": cards,
         "count": sum(card is not None for card in cards),
-        "latency_ms": round((time.perf_counter() - started) * 1000),
+        "latency_ms": latency_ms,
     }
 
 
@@ -556,25 +529,21 @@ async def scan_zone_fallback(
         image_bytes = await file.read()
         if not image_bytes:
             raise HTTPException(status_code=400, detail="One or more fallback corner images were empty.")
-        images.append(ImageContent(image_base64=base64.b64encode(image_bytes).decode('utf-8')))
+        images.append((image_bytes, file.content_type))
 
-    started = time.perf_counter()
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"card-corner-fallback-{uuid.uuid4()}",
-        system_message="You read rank and suit from small playing-card corner crops and reply with JSON only.",
-    ).with_model("openai", "gpt-5.4")
     try:
-        response = await chat.send_message(UserMessage(text=FALLBACK_SCAN_PROMPT, file_contents=images))
+        response, latency_ms = await recognize_images(FALLBACK_SCAN_PROMPT, images)
         cards = parse_position_cards_json(response, len(files))
+    except VisionConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
-        logger.error(f"scan-zone-fallback error: {exc}")
+        logger.error("scan-zone-fallback error: %s", exc)
         raise HTTPException(status_code=422, detail="Fallback could not read the unresolved card corners.")
 
     return {
         "positions": slot_positions,
         "cards": cards,
-        "latency_ms": round((time.perf_counter() - started) * 1000),
+        "latency_ms": latency_ms,
     }
 
 
