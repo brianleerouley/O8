@@ -9,8 +9,10 @@ import {
   CARD_ZONES,
   EMPTY_SCAN_SLOTS,
   forceConfirmSlot,
+  mapDisplayRectToSource,
   scanValidation,
   stabilizeSlots,
+  unresolvedFallbackPositions,
 } from "../lib/cardScan";
 import { recognizeCornerSamples } from "../lib/localCardRecognition";
 
@@ -18,6 +20,7 @@ const SAMPLE_GAP_MS = 140;
 const RESCAN_DELAY_MS = 250;
 const CORNER_WIDTH = 0.42;
 const CORNER_HEIGHT = 0.5;
+const FALLBACK_RETRY_MS = 5000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const blobFromCanvas = (canvas, name) =>
@@ -37,6 +40,10 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
   const slotsRef = useRef(EMPTY_SCAN_SLOTS());
   const unresolvedAttemptsRef = useRef([0, 0, 0, 0]);
   const fallbackInFlightRef = useRef(false);
+  const fallbackEnabledRef = useRef(true);
+  const lastFallbackAtRef = useRef([0, 0, 0, 0]);
+  const recognitionStartedAtRef = useRef(null);
+  const cameraSessionRef = useRef(0);
 
   const [error, setError] = useState(null);
   const [ready, setReady] = useState(false);
@@ -62,7 +69,12 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
     setSlots(slotsRef.current);
   }, []);
 
+  useEffect(() => {
+    fallbackEnabledRef.current = fallbackEnabled;
+  }, [fallbackEnabled]);
+
   const stopCamera = useCallback(() => {
+    cameraSessionRef.current += 1;
     activeRef.current = false;
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
@@ -71,36 +83,33 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
     setReady(false);
   }, []);
 
-  const captureCorners = useCallback(async () => {
+  const captureCorners = useCallback(() => {
     const video = videoRef.current;
     if (!video?.videoWidth || !video?.videoHeight) return [];
-    return Promise.all(
-      CARD_ZONES.map(async (zone, index) => {
-        const canvas = document.createElement("canvas");
-        const sourceWidth = video.videoWidth * zone.width * CORNER_WIDTH;
-        const sourceHeight = video.videoHeight * zone.height * CORNER_HEIGHT;
-        canvas.width = 72;
-        canvas.height = 96;
-        canvas
-          .getContext("2d", { alpha: false })
-          .drawImage(
-            video,
-            Math.round(video.videoWidth * zone.left),
-            Math.round(video.videoHeight * zone.top),
-            Math.round(sourceWidth),
-            Math.round(sourceHeight),
-            0,
-            0,
-            canvas.width,
-            canvas.height
-          );
-        const [file, imageData] = await Promise.all([
-          blobFromCanvas(canvas, `corner-${index + 1}.jpg`),
-          Promise.resolve(canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height)),
-        ]);
-        return { file, imageData };
-      })
-    );
+    const displayWidth = video.clientWidth;
+    const displayHeight = video.clientHeight;
+    if (!displayWidth || !displayHeight) return [];
+    return CARD_ZONES.map((zone) => {
+      const canvas = document.createElement("canvas");
+      const source = mapDisplayRectToSource(
+        {
+          left: zone.left,
+          top: zone.top,
+          width: zone.width * CORNER_WIDTH,
+          height: zone.height * CORNER_HEIGHT,
+        },
+        video.videoWidth,
+        video.videoHeight,
+        displayWidth,
+        displayHeight
+      );
+      if (!source) return null;
+      canvas.width = 72;
+      canvas.height = 96;
+      const context = canvas.getContext("2d", { alpha: false });
+      context.drawImage(video, source.x, source.y, source.width, source.height, 0, 0, canvas.width, canvas.height);
+      return { canvas, imageData: context.getImageData(0, 0, canvas.width, canvas.height) };
+    });
   }, []);
 
   const captureBurst = useCallback(async () => {
@@ -123,7 +132,7 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
       try {
         const cycleStarted = performance.now();
         const { first, second, cropMs } = await captureBurst();
-        if (first.length !== 4 || second.length !== 4 || !activeRef.current) {
+        if (first.length !== 4 || second.length !== 4 || first.some((sample) => !sample) || second.some((sample) => !sample) || !activeRef.current) {
           await sleep(RESCAN_DELAY_MS);
           continue;
         }
@@ -133,6 +142,9 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
           second.map((sample) => sample.imageData)
         );
         const localMs = performance.now() - localStarted;
+        if (recognitionStartedAtRef.current === null && detected.some(Boolean)) {
+          recognitionStartedAtRef.current = cycleStarted;
+        }
         detected.forEach((card, index) => {
           unresolvedAttemptsRef.current[index] = card?.stable_samples === 2
             ? 0
@@ -141,23 +153,28 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
 
         let fallbackMs = 0;
         let fallbackError = null;
-        const fallbackPositions = slotsRef.current
-          .map((slot, index) => ({ slot, index }))
-          .filter(({ slot, index }) =>
-            !slot.locked && unresolvedAttemptsRef.current[index] >= 2 && (!detected[index] || detected[index].confidence === "low")
-          )
-          .map(({ index }) => index);
-        if (fallbackEnabled && fallbackPositions.length && !fallbackInFlightRef.current) {
+        const now = performance.now();
+        const fallbackPositions = unresolvedFallbackPositions(slotsRef.current, detected, unresolvedAttemptsRef.current)
+          .filter((index) => now - lastFallbackAtRef.current[index] >= FALLBACK_RETRY_MS);
+        if (fallbackEnabledRef.current && fallbackPositions.length && !fallbackInFlightRef.current) {
           fallbackInFlightRef.current = true;
+          fallbackPositions.forEach((index) => { lastFallbackAtRef.current[index] = now; });
           const fallbackStarted = performance.now();
           try {
+            const fallbackFiles = await Promise.all(
+              fallbackPositions.map((index) => blobFromCanvas(second[index].canvas, `corner-${index + 1}.jpg`))
+            );
+            if (fallbackFiles.some((file) => !file)) throw new Error("Could not encode fallback card crop.");
             const data = await fallbackCardZones(
-              fallbackPositions.map((index) => second[index].file),
+              fallbackFiles,
               fallbackPositions
             );
             fallbackMs = performance.now() - fallbackStarted;
             data.positions.forEach((position, resultIndex) => {
-              if (data.cards[resultIndex]) detected[position] = data.cards[resultIndex];
+              if (data.cards[resultIndex]) {
+                detected[position] = data.cards[resultIndex];
+                unresolvedAttemptsRef.current[position] = 0;
+              }
             });
           } catch (err) {
             fallbackMs = performance.now() - fallbackStarted;
@@ -171,7 +188,9 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
         const nextSlots = stabilizeSlots(slotsRef.current, detected);
         const stabilizationMs = performance.now() - stabilizationStarted;
         setScanSlots(nextSlots);
-        const totalMs = nextSlots.every((slot) => slot.locked) ? performance.now() - cycleStarted : 0;
+        const totalMs = nextSlots.every((slot) => slot.locked) && recognitionStartedAtRef.current !== null
+          ? performance.now() - recognitionStartedAtRef.current
+          : 0;
         setTimings({
           crop_ms: Math.round(cropMs),
           local_ms: Math.round(localMs),
@@ -187,14 +206,17 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
       }
       await sleep(RESCAN_DELAY_MS);
     }
-  }, [captureBurst, fallbackEnabled, setScanSlots]);
+  }, [captureBurst, setScanSlots]);
 
   const start = useCallback(async () => {
+    const session = ++cameraSessionRef.current;
     setError(null);
     setScanError(null);
     setLatency(null);
     setTimings({ crop_ms: 0, local_ms: 0, fallback_ms: 0, stabilization_ms: 0, total_ms: 0 });
     unresolvedAttemptsRef.current = [0, 0, 0, 0];
+    lastFallbackAtRef.current = [0, 0, 0, 0];
+    recognitionStartedAtRef.current = null;
     fallbackInFlightRef.current = false;
     const empty = EMPTY_SCAN_SLOTS();
     setScanSlots(empty);
@@ -207,15 +229,23 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
         },
         audio: false,
       });
+      if (cameraSessionRef.current !== session) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
+        if (cameraSessionRef.current !== session) return;
         setReady(true);
         activeRef.current = true;
         scanningRef.current = true;
         setScanning(true);
         loop();
+      } else {
+        stream.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
       }
     } catch (err) {
       setError(
@@ -237,6 +267,8 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
     setLatency(null);
     setTimings({ crop_ms: 0, local_ms: 0, fallback_ms: 0, stabilization_ms: 0, total_ms: 0 });
     unresolvedAttemptsRef.current = [0, 0, 0, 0];
+    lastFallbackAtRef.current = [0, 0, 0, 0];
+    recognitionStartedAtRef.current = null;
     scanningRef.current = true;
     setScanning(true);
   };
@@ -247,6 +279,9 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
         slotIndex === index ? { ...slot, locked: false, matches: 0, candidateId: null } : slot
       )
     );
+    unresolvedAttemptsRef.current[index] = 0;
+    lastFallbackAtRef.current[index] = 0;
+    recognitionStartedAtRef.current = null;
     scanningRef.current = true;
     setScanning(true);
   };
@@ -255,6 +290,8 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
     setScanSlots((current) =>
       current.map((slot, slotIndex) => (slotIndex === index ? forceConfirmSlot(slot, card) : slot))
     );
+    unresolvedAttemptsRef.current[index] = 0;
+    lastFallbackAtRef.current[index] = 0;
   };
 
   const confirm = () => {
@@ -362,7 +399,7 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
               <span>Local recognition <b className="text-zinc-300">{timings.local_ms} ms</b></span>
               <span>Fallback network <b className="text-zinc-300">{timings.fallback_ms} ms</b></span>
               <span>Stabilization <b className="text-zinc-300">{timings.stabilization_ms} ms</b></span>
-              <span>Stable hand total <b className="text-zinc-300">{timings.total_ms} ms</b></span>
+              <span>Recognition-to-lock <b className="text-zinc-300">{timings.total_ms} ms</b></span>
             </div>
           </div>
         )}

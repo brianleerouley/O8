@@ -1,4 +1,12 @@
-import { connectedComponents, diceScore, normalizeComponents, otsuThreshold, reconcileSamples } from "./localCardRecognition";
+import {
+  connectedComponents,
+  diceScore,
+  imageDataToMask,
+  normalizeComponents,
+  otsuThreshold,
+  reconcileSamples,
+  translatedDiceScore,
+} from "./localCardRecognition";
 
 test("Otsu threshold separates dark ink from a light card", () => {
   expect(otsuThreshold([20, 22, 25, 230, 235, 240])).toBeGreaterThan(25);
@@ -34,4 +42,34 @@ test("disagreeing local samples stay low confidence", () => {
     confidence: "low",
     stable_samples: 1,
   });
+});
+
+test("template scoring tolerates small glyph translation", () => {
+  const original = new Uint8Array(24 * 32);
+  const shifted = new Uint8Array(24 * 32);
+  original[10 * 24 + 10] = 1;
+  original[10 * 24 + 11] = 1;
+  shifted[12 * 24 + 12] = 1;
+  shifted[12 * 24 + 13] = 1;
+  expect(diceScore(original, shifted)).toBe(0);
+  expect(translatedDiceScore(original, shifted)).toBe(1);
+});
+
+test("thresholding preserves both red and black card ink across brightness changes", () => {
+  const imageData = {
+    width: 4,
+    height: 1,
+    data: Uint8ClampedArray.from([
+      25, 25, 25, 255,
+      175, 15, 25, 255,
+      235, 235, 225, 255,
+      255, 250, 245, 255,
+    ]),
+  };
+  expect(Array.from(imageDataToMask(imageData).mask)).toEqual([1, 1, 0, 0]);
+});
+
+test("paired samples preserve the two-character 10 rank", () => {
+  const card = { rank: "10", suit: "D", confidence: "high", local_score: 0.75 };
+  expect(reconcileSamples([card], [card])[0]).toMatchObject({ rank: "10", suit: "D", stable_samples: 2 });
 });

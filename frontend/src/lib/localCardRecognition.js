@@ -121,6 +121,34 @@ export function diceScore(first, second) {
   return firstCount + secondCount ? (2 * overlap) / (firstCount + secondCount) : 0;
 }
 
+export function translatedDiceScore(first, second, width = NORMAL_WIDTH, maxShift = 2) {
+  let best = 0;
+  const height = Math.floor(first.length / width);
+  const secondCount = second.reduce((total, value) => total + value, 0);
+  for (let shiftY = -maxShift; shiftY <= maxShift; shiftY++) {
+    for (let shiftX = -maxShift; shiftX <= maxShift; shiftX++) {
+      let firstCount = 0;
+      let overlap = 0;
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const sourceX = x - shiftX;
+          const sourceY = y - shiftY;
+          if (
+            sourceX >= 0 && sourceX < width && sourceY >= 0 && sourceY < height
+            && first[sourceY * width + sourceX]
+          ) {
+            firstCount += 1;
+            if (second[y * width + x]) overlap += 1;
+          }
+        }
+      }
+      const score = firstCount + secondCount ? (2 * overlap) / (firstCount + secondCount) : 0;
+      best = Math.max(best, score);
+    }
+  }
+  return best;
+}
+
 function renderTemplate(text, font) {
   const canvas = document.createElement("canvas");
   canvas.width = 54;
@@ -150,7 +178,7 @@ function getTemplates() {
 
 function matchTemplates(mask, templates) {
   const scores = templates
-    .map((template) => ({ label: template.label, score: diceScore(mask, template.mask) }))
+    .map((template) => ({ label: template.label, score: translatedDiceScore(mask, template.mask) }))
     .sort((a, b) => b.score - a.score);
   const bestByLabel = [];
   scores.forEach((score) => {
