@@ -8,7 +8,7 @@ import { cardId } from "../lib/cards";
 import { EMPTY_SCAN_SLOTS, forceConfirmSlot, frameSlotsFromCards, mapDisplayRectToSource, scanValidation } from "../lib/cardScan";
 import { recognizeFannedCardFrame } from "../lib/localCardRecognition";
 
-export const CAPTURE_GUIDE = { left: 0.05, top: 0.07, width: 0.9, height: 0.38 };
+export const CAPTURE_GUIDE = { left: 0.04, top: 0.04, width: 0.92, height: 0.72 };
 
 const EMPTY_TIMINGS = { capture_ms: 0, local_ms: 0, fallback_ms: 0, total_ms: 0 };
 
@@ -227,6 +227,9 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
           </div>
         ) : (
           <div className="space-y-4">
+            <p className="text-center text-xs font-semibold text-[#f4d66d]">
+              Keep all 4 rank/suit corners visible
+            </p>
             <div className="relative rounded-xl overflow-hidden bg-black aspect-video ring-1 ring-zinc-700">
               {phase === "preview" ? (
                 <video ref={videoRef} playsInline muted className="w-full h-full object-cover" />
@@ -242,11 +245,7 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
                   width: `${CAPTURE_GUIDE.width * 100}%`,
                   height: `${CAPTURE_GUIDE.height * 100}%`,
                 }}
-              >
-                <span className="absolute left-1/2 top-2 -translate-x-1/2 whitespace-nowrap rounded-full bg-black/70 px-3 py-1 text-[11px] font-semibold text-[#f4d66d]">
-                  Keep all 4 rank/suit corners visible
-                </span>
-              </div>
+              />
               {phase === "processing" && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/65">
                   <Loader2 className="w-8 h-8 animate-spin text-[#d4af37]" />
