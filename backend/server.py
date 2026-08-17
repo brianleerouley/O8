@@ -11,8 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from pydantic import BaseModel, field_validator
 from typing import List, Dict, Any
-from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
 from card_recognition import parse_position_cards_json, parse_zone_cards_json
+from emergent_llm import ImageContent, LlmChat, UserMessage, unavailable_reason
 from persistence import clear_hand_records, list_hand_records, persistence_enabled, save_hand_record
 
 ROOT_DIR = Path(__file__).parent
@@ -323,6 +323,13 @@ async def evaluate(req: EvaluateRequest):
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/jpg', 'image/png', 'image/webp'}
 
+
+def require_remote_recognition():
+    reason = unavailable_reason(EMERGENT_LLM_KEY)
+    if reason:
+        raise HTTPException(status_code=503, detail=reason)
+
+
 RECOGNIZE_PROMPT = (
     "You are a playing-card recognizer. The image shows exactly four playing cards. "
     "Identify each card's rank and suit, reading left to right. "
@@ -366,8 +373,7 @@ def _parse_cards_json(text: str) -> List[Dict[str, str]]:
 
 @api_router.post("/recognize-cards")
 async def recognize_cards(file: UploadFile = File(...)):
-    if not EMERGENT_LLM_KEY:
-        raise HTTPException(status_code=500, detail="LLM key not configured on the server.")
+    require_remote_recognition()
     if file.content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=400,
                             detail="Unsupported image type. Please upload a JPEG, PNG, or WEBP.")
@@ -426,8 +432,7 @@ SCAN_PROMPT = (
 @api_router.post("/scan-frame")
 async def scan_frame(file: UploadFile = File(...)):
     """Lenient single-frame recognizer for live camera scanning (returns 0-4 cards)."""
-    if not EMERGENT_LLM_KEY:
-        raise HTTPException(status_code=500, detail="LLM key not configured on the server.")
+    require_remote_recognition()
     if file.content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=400, detail="Unsupported image type.")
 
@@ -481,8 +486,7 @@ ZONE_SCAN_PROMPT = (
 @api_router.post("/scan-zones")
 async def scan_zones(files: List[UploadFile] = File(...)):
     """Recognize four fixed card zones from two successive cropped samples."""
-    if not EMERGENT_LLM_KEY:
-        raise HTTPException(status_code=500, detail="LLM key not configured on the server.")
+    require_remote_recognition()
     if len(files) != 8:
         raise HTTPException(status_code=400, detail="Expected two samples for each of four card zones.")
 
@@ -533,8 +537,7 @@ async def scan_zone_fallback(
     positions: str = Form(...),
 ):
     """Remote fallback for only the card corners unresolved by local recognition."""
-    if not EMERGENT_LLM_KEY:
-        raise HTTPException(status_code=500, detail="LLM key not configured on the server.")
+    require_remote_recognition()
     try:
         slot_positions = json.loads(positions)
     except json.JSONDecodeError:
