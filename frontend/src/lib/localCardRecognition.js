@@ -261,3 +261,45 @@ export function reconcileSamples(first, second) {
 export function recognizeCornerSamples(first, second) {
   return reconcileSamples(first.map(recognizeCorner), second.map(recognizeCorner));
 }
+
+export function selectFannedCandidates(candidates, count = 4, minimumSpacing = 0.12) {
+  const selected = [];
+  [...candidates]
+    .filter((candidate) => candidate?.card?.rank && candidate?.card?.suit)
+    .sort((first, second) => (second.card.local_score || 0) - (first.card.local_score || 0))
+    .forEach((candidate) => {
+      if (
+        selected.length < count
+        && !selected.some((chosen) => Math.abs(chosen.x - candidate.x) < minimumSpacing)
+      ) {
+        selected.push(candidate);
+      }
+    });
+  return selected.sort((first, second) => first.x - second.x).map((candidate) => candidate.card);
+}
+
+export function recognizeFannedCardFrame(canvas) {
+  const width = canvas.width;
+  const height = canvas.height;
+  if (!width || !height) return [];
+  const windowWidth = Math.max(72, Math.round(width * 0.22));
+  const windowHeight = Math.max(96, Math.round(height * 0.9));
+  const maxX = Math.max(0, width - windowWidth);
+  const step = Math.max(1, maxX / 12);
+  const yPositions = [0, Math.max(0, height - windowHeight)];
+  const candidates = [];
+
+  for (let x = 0; x <= maxX + 0.5; x += step) {
+    for (const y of yPositions) {
+      const corner = document.createElement("canvas");
+      corner.width = 72;
+      corner.height = 96;
+      const context = corner.getContext("2d", { alpha: false });
+      context.drawImage(canvas, x, y, windowWidth, windowHeight, 0, 0, corner.width, corner.height);
+      const card = recognizeCorner(context.getImageData(0, 0, corner.width, corner.height));
+      if (card) candidates.push({ x: (x + windowWidth / 2) / width, card });
+    }
+  }
+
+  return selectFannedCandidates(candidates);
+}
