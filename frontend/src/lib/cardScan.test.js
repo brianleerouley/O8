@@ -1,5 +1,6 @@
 import {
   EMPTY_SCAN_SLOTS,
+  frameSlotsFromCards,
   forceConfirmSlot,
   mapDisplayRectToSource,
   scanValidation,
@@ -75,4 +76,17 @@ test("fallback includes only unresolved unlocked positions", () => {
   slots[0] = forceConfirmSlot(slots[0], hand[0]);
   const detected = [hand[0], null, { ...hand[2], confidence: "medium" }, { ...hand[3], confidence: "low" }];
   expect(unresolvedFallbackPositions(slots, detected, [9, 2, 3, 2])).toEqual([1, 3]);
+});
+
+test("single-frame results require uncertain cards to be manually verified", () => {
+  const cards = hand.map((card, index) => ({
+    ...card,
+    confidence: index === 2 ? "medium" : "high",
+  }));
+  const slots = frameSlotsFromCards(cards);
+  expect(slots[0].locked).toBe(true);
+  expect(slots[2].locked).toBe(false);
+  expect(scanValidation(slots).ready).toBe(false);
+  slots[2] = forceConfirmSlot(slots[2], cards[2]);
+  expect(scanValidation(slots).ready).toBe(true);
 });

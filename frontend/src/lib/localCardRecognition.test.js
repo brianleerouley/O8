@@ -5,6 +5,7 @@ import {
   normalizeComponents,
   otsuThreshold,
   reconcileSamples,
+  selectFannedCandidates,
   translatedDiceScore,
 } from "./localCardRecognition";
 
@@ -72,4 +73,25 @@ test("thresholding preserves both red and black card ink across brightness chang
 test("paired samples preserve the two-character 10 rank", () => {
   const card = { rank: "10", suit: "D", confidence: "high", local_score: 0.75 };
   expect(reconcileSamples([card], [card])[0]).toMatchObject({ rank: "10", suit: "D", stable_samples: 2 });
+});
+
+test("fanned candidates suppress overlapping reads and preserve left-to-right order", () => {
+  const candidates = [
+    { x: 0.72, card: { rank: "K", suit: "D", local_score: 0.7 } },
+    { x: 0.18, card: { rank: "A", suit: "S", local_score: 0.8 } },
+    { x: 0.2, card: { rank: "Q", suit: "S", local_score: 0.5 } },
+    { x: 0.52, card: { rank: "5", suit: "C", local_score: 0.75 } },
+    { x: 0.35, card: { rank: "2", suit: "H", local_score: 0.78 } },
+  ];
+  expect(selectFannedCandidates(candidates).map((card) => `${card.rank}${card.suit}`)).toEqual([
+    "AS", "2H", "5C", "KD",
+  ]);
+});
+
+test("fanned candidate selection leaves unresolved positions for manual correction", () => {
+  const cards = selectFannedCandidates([
+    { x: 0.2, card: { rank: "A", suit: "S", local_score: 0.8 } },
+    { x: 0.7, card: { rank: "K", suit: "D", local_score: 0.7 } },
+  ]);
+  expect(cards).toHaveLength(2);
 });

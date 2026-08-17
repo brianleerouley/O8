@@ -44,6 +44,22 @@ export const EMPTY_SCAN_SLOTS = () =>
     confidence: "low",
   }));
 
+export function frameSlotsFromCards(cards) {
+  return EMPTY_SCAN_SLOTS().map((slot, index) => {
+    const card = cards[index];
+    if (!card?.rank || !card?.suit) return slot;
+    const confidence = card.confidence || "medium";
+    return {
+      ...slot,
+      card: { ...card, confidence },
+      candidateId: cardId(card),
+      confidence,
+      matches: confidence === "high" ? 2 : 1,
+      locked: confidence === "high",
+    };
+  });
+}
+
 const matchesNeeded = (confidence) => {
   if (confidence === "high") return 2;
   if (confidence === "medium") return 3;
