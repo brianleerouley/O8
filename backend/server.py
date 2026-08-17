@@ -1,7 +1,6 @@
 from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import json
 import base64
@@ -14,13 +13,20 @@ from pydantic import BaseModel, field_validator
 from typing import List, Dict, Any
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
 from card_recognition import parse_position_cards_json, parse_zone_cards_json
+from persistence import clear_hand_records, list_hand_records, persistence_enabled, save_hand_record
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+PERSISTENCE_ENABLED = persistence_enabled()
+client = None
+db = None
+if PERSISTENCE_ENABLED:
+    from motor.motor_asyncio import AsyncIOMotorClient
+
+    mongo_url = os.environ['MONGO_URL']
+    client = AsyncIOMotorClient(mongo_url)
+    db = client[os.environ['DB_NAME']]
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -608,21 +614,20 @@ async def save_hand(req: SaveHandRequest):
         'source': req.source if req.source in ('camera', 'upload') else 'camera',
         'timestamp': datetime.now(timezone.utc).isoformat(),
     }
-    await db.hands.insert_one({**record})
+    await save_hand_record(db, PERSISTENCE_ENABLED, record)
     return record
 
 
 @api_router.get("/hands")
 async def list_hands(limit: int = 50):
-    limit = max(1, min(limit, 100))
-    docs = await db.hands.find({}, {"_id": 0}).sort("timestamp", -1).to_list(limit)
+    docs = await list_hand_records(db, PERSISTENCE_ENABLED, limit)
     return {"hands": docs}
 
 
 @api_router.delete("/hands")
 async def clear_hands():
-    result = await db.hands.delete_many({})
-    return {"deleted": result.deleted_count}
+    deleted = await clear_hand_records(db, PERSISTENCE_ENABLED)
+    return {"deleted": deleted}
 
 
 app.include_router(api_router)
@@ -638,4 +643,5 @@ app.add_middleware(
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
-    client.close()
+    if client is not None:
+        client.close()
