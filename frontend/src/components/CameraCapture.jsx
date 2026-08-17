@@ -155,7 +155,12 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
     const guide = extractGuide(frame);
     const captureMs = performance.now() - started;
     const localStarted = performance.now();
-    let cards = recognizeFannedCardFrame(guide);
+    const localResult = recognizeFannedCardFrame(guide);
+    let cards = localResult.cards;
+    if (process.env.NODE_ENV !== "production") {
+      globalThis.__OMAHA8_SCAN_DEBUG__ = localResult.debug;
+      console.debug("[Omaha8 card recognition]", localResult.debug);
+    }
     const localMs = performance.now() - localStarted;
     let fallbackMs = 0;
     let fallbackError = null;
