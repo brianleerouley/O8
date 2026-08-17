@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -13,7 +13,7 @@ from pathlib import Path
 from pydantic import BaseModel, field_validator
 from typing import List, Dict, Any
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
-from card_recognition import parse_zone_cards_json
+from card_recognition import parse_position_cards_json, parse_zone_cards_json
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -505,6 +505,66 @@ async def scan_zones(files: List[UploadFile] = File(...)):
     return {
         "cards": cards,
         "count": sum(card is not None for card in cards),
+        "latency_ms": round((time.perf_counter() - started) * 1000),
+    }
+
+
+FALLBACK_SCAN_PROMPT = (
+    "You are a fallback recognizer for unresolved playing-card corner crops. "
+    "Each image contains only the upper-left rank and suit corner of one card. "
+    "Read each image independently and preserve image order. "
+    "Respond with ONLY valid JSON shaped as "
+    '{"cards":[{"rank":"A","suit":"S","confidence":"high","stable_samples":2}]}. '
+    "Return one array entry per image, using null when unreadable. "
+    "rank must be A, K, Q, J, 10, 9, 8, 7, 6, 5, 4, 3, or 2. "
+    "suit must be S, H, D, or C. Use stable_samples 2 only for a high-confidence reading."
+)
+
+
+@api_router.post("/scan-zone-fallback")
+async def scan_zone_fallback(
+    files: List[UploadFile] = File(...),
+    positions: str = Form(...),
+):
+    """Remote fallback for only the card corners unresolved by local recognition."""
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(status_code=500, detail="LLM key not configured on the server.")
+    try:
+        slot_positions = json.loads(positions)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid fallback card positions.")
+    if not files or len(files) > 4 or len(slot_positions) != len(files):
+        raise HTTPException(status_code=400, detail="Fallback requires one to four matching card positions.")
+    if any(not isinstance(position, int) or position < 0 or position > 3 for position in slot_positions):
+        raise HTTPException(status_code=400, detail="Fallback card positions must be between 0 and 3.")
+    if len(set(slot_positions)) != len(slot_positions):
+        raise HTTPException(status_code=400, detail="Fallback card positions must be unique.")
+
+    images = []
+    for file in files:
+        if file.content_type not in ALLOWED_IMAGE_TYPES:
+            raise HTTPException(status_code=400, detail="Unsupported fallback corner image type.")
+        image_bytes = await file.read()
+        if not image_bytes:
+            raise HTTPException(status_code=400, detail="One or more fallback corner images were empty.")
+        images.append(ImageContent(image_base64=base64.b64encode(image_bytes).decode('utf-8')))
+
+    started = time.perf_counter()
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"card-corner-fallback-{uuid.uuid4()}",
+        system_message="You read rank and suit from small playing-card corner crops and reply with JSON only.",
+    ).with_model("openai", "gpt-5.4")
+    try:
+        response = await chat.send_message(UserMessage(text=FALLBACK_SCAN_PROMPT, file_contents=images))
+        cards = parse_position_cards_json(response, len(files))
+    except Exception as exc:
+        logger.error(f"scan-zone-fallback error: {exc}")
+        raise HTTPException(status_code=422, detail="Fallback could not read the unresolved card corners.")
+
+    return {
+        "positions": slot_positions,
+        "cards": cards,
         "latency_ms": round((time.perf_counter() - started) * 1000),
     }
 

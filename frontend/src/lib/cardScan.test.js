@@ -27,3 +27,9 @@ test("manual correction locks a slot but duplicate validation still fails", () =
   slots[3] = forceConfirmSlot(slots[3], hand[0]);
   expect(scanValidation(slots)).toMatchObject({ complete: true, unique: false, ready: false });
 });
+
+test("a paired local or fallback result can lock in one recognition cycle", () => {
+  const paired = hand.map((card) => ({ ...card, stable_samples: 2 }));
+  const slots = stabilizeSlots(EMPTY_SCAN_SLOTS(), paired);
+  expect(slots.every((slot) => slot.locked)).toBe(true);
+});
