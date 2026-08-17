@@ -1,7 +1,8 @@
 import { useRef, useState, useEffect, useCallback, useMemo } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "./ui/dialog";
+import { Switch } from "./ui/switch";
 import { CameraOff, RefreshCw, CheckCircle2, Radar, Lock, Unlock, ScanLine } from "lucide-react";
-import { scanCardZones } from "../lib/api";
+import { fallbackCardZones } from "../lib/api";
 import { cardId, SUIT_MAP } from "../lib/cards";
 import { CardSelector } from "./CardSelector";
 import {
@@ -11,9 +12,12 @@ import {
   scanValidation,
   stabilizeSlots,
 } from "../lib/cardScan";
+import { recognizeCornerSamples } from "../lib/localCardRecognition";
 
 const SAMPLE_GAP_MS = 140;
 const RESCAN_DELAY_MS = 250;
+const CORNER_WIDTH = 0.42;
+const CORNER_HEIGHT = 0.5;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const blobFromCanvas = (canvas, name) =>
@@ -31,6 +35,8 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
   const activeRef = useRef(false);
   const scanningRef = useRef(true);
   const slotsRef = useRef(EMPTY_SCAN_SLOTS());
+  const unresolvedAttemptsRef = useRef([0, 0, 0, 0]);
+  const fallbackInFlightRef = useRef(false);
 
   const [error, setError] = useState(null);
   const [ready, setReady] = useState(false);
@@ -38,6 +44,14 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
   const [slots, setSlots] = useState(() => EMPTY_SCAN_SLOTS());
   const [latency, setLatency] = useState(null);
   const [scanError, setScanError] = useState(null);
+  const [fallbackEnabled, setFallbackEnabled] = useState(true);
+  const [timings, setTimings] = useState({
+    crop_ms: 0,
+    local_ms: 0,
+    fallback_ms: 0,
+    stabilization_ms: 0,
+    total_ms: 0,
+  });
 
   const validation = useMemo(() => scanValidation(slots), [slots]);
   const usedIds = validation.cards.filter((card) => card?.rank && card?.suit).map(cardId);
@@ -57,38 +71,47 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
     setReady(false);
   }, []);
 
-  const captureZones = useCallback(async () => {
+  const captureCorners = useCallback(async () => {
     const video = videoRef.current;
     if (!video?.videoWidth || !video?.videoHeight) return [];
     return Promise.all(
       CARD_ZONES.map(async (zone, index) => {
         const canvas = document.createElement("canvas");
-        canvas.width = Math.max(180, Math.round(video.videoWidth * zone.width));
-        canvas.height = Math.max(260, Math.round(video.videoHeight * zone.height));
+        const sourceWidth = video.videoWidth * zone.width * CORNER_WIDTH;
+        const sourceHeight = video.videoHeight * zone.height * CORNER_HEIGHT;
+        canvas.width = 72;
+        canvas.height = 96;
         canvas
           .getContext("2d", { alpha: false })
           .drawImage(
             video,
             Math.round(video.videoWidth * zone.left),
             Math.round(video.videoHeight * zone.top),
-            Math.round(video.videoWidth * zone.width),
-            Math.round(video.videoHeight * zone.height),
+            Math.round(sourceWidth),
+            Math.round(sourceHeight),
             0,
             0,
             canvas.width,
             canvas.height
           );
-        return blobFromCanvas(canvas, `slot-${index + 1}.jpg`);
+        const [file, imageData] = await Promise.all([
+          blobFromCanvas(canvas, `corner-${index + 1}.jpg`),
+          Promise.resolve(canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height)),
+        ]);
+        return { file, imageData };
       })
     );
   }, []);
 
   const captureBurst = useCallback(async () => {
-    const first = await captureZones();
+    const firstStarted = performance.now();
+    const first = await captureCorners();
+    const firstMs = performance.now() - firstStarted;
     await sleep(SAMPLE_GAP_MS);
-    const second = await captureZones();
-    return [...first, ...second].filter(Boolean);
-  }, [captureZones]);
+    const secondStarted = performance.now();
+    const second = await captureCorners();
+    return { first, second, cropMs: firstMs + performance.now() - secondStarted };
+  }, [captureCorners]);
 
   const loop = useCallback(async () => {
     await sleep(450);
@@ -98,29 +121,81 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
         continue;
       }
       try {
-        const files = await captureBurst();
-        if (files.length !== 8 || !activeRef.current) {
+        const cycleStarted = performance.now();
+        const { first, second, cropMs } = await captureBurst();
+        if (first.length !== 4 || second.length !== 4 || !activeRef.current) {
           await sleep(RESCAN_DELAY_MS);
           continue;
         }
-        const started = performance.now();
-        const data = await scanCardZones(files);
-        if (!activeRef.current) return;
-        setLatency(data.latency_ms || Math.round(performance.now() - started));
-        setScanError(null);
-        setScanSlots((current) => stabilizeSlots(current, data.cards || []));
+        const localStarted = performance.now();
+        let detected = recognizeCornerSamples(
+          first.map((sample) => sample.imageData),
+          second.map((sample) => sample.imageData)
+        );
+        const localMs = performance.now() - localStarted;
+        detected.forEach((card, index) => {
+          unresolvedAttemptsRef.current[index] = card?.stable_samples === 2
+            ? 0
+            : unresolvedAttemptsRef.current[index] + 1;
+        });
+
+        let fallbackMs = 0;
+        let fallbackError = null;
+        const fallbackPositions = slotsRef.current
+          .map((slot, index) => ({ slot, index }))
+          .filter(({ slot, index }) =>
+            !slot.locked && unresolvedAttemptsRef.current[index] >= 2 && (!detected[index] || detected[index].confidence === "low")
+          )
+          .map(({ index }) => index);
+        if (fallbackEnabled && fallbackPositions.length && !fallbackInFlightRef.current) {
+          fallbackInFlightRef.current = true;
+          const fallbackStarted = performance.now();
+          try {
+            const data = await fallbackCardZones(
+              fallbackPositions.map((index) => second[index].file),
+              fallbackPositions
+            );
+            fallbackMs = performance.now() - fallbackStarted;
+            data.positions.forEach((position, resultIndex) => {
+              if (data.cards[resultIndex]) detected[position] = data.cards[resultIndex];
+            });
+          } catch (err) {
+            fallbackMs = performance.now() - fallbackStarted;
+            fallbackError = err?.response?.data?.detail || "Remote fallback unavailable; local scanning continues.";
+          } finally {
+            fallbackInFlightRef.current = false;
+          }
+        }
+
+        const stabilizationStarted = performance.now();
+        const nextSlots = stabilizeSlots(slotsRef.current, detected);
+        const stabilizationMs = performance.now() - stabilizationStarted;
+        setScanSlots(nextSlots);
+        const totalMs = nextSlots.every((slot) => slot.locked) ? performance.now() - cycleStarted : 0;
+        setTimings({
+          crop_ms: Math.round(cropMs),
+          local_ms: Math.round(localMs),
+          fallback_ms: Math.round(fallbackMs),
+          stabilization_ms: Number(stabilizationMs.toFixed(1)),
+          total_ms: Math.round(totalMs),
+        });
+        setLatency(Math.round(cropMs + localMs + fallbackMs + stabilizationMs));
+        setScanError(fallbackError);
       } catch (err) {
         if (!activeRef.current) return;
         setScanError(err?.response?.data?.detail || "Recognition paused. Retrying…");
       }
       await sleep(RESCAN_DELAY_MS);
     }
-  }, [captureBurst, setScanSlots]);
+  }, [captureBurst, fallbackEnabled, setScanSlots]);
 
   const start = useCallback(async () => {
     setError(null);
     setScanError(null);
     setLatency(null);
+    setTimings({ crop_ms: 0, local_ms: 0, fallback_ms: 0, stabilization_ms: 0, total_ms: 0 });
+    unresolvedAttemptsRef.current = [0, 0, 0, 0];
+    fallbackInFlightRef.current = false;
     const empty = EMPTY_SCAN_SLOTS();
     setScanSlots(empty);
     try {
@@ -160,6 +235,8 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
     setScanSlots(EMPTY_SCAN_SLOTS());
     setScanError(null);
     setLatency(null);
+    setTimings({ crop_ms: 0, local_ms: 0, fallback_ms: 0, stabilization_ms: 0, total_ms: 0 });
+    unresolvedAttemptsRef.current = [0, 0, 0, 0];
     scanningRef.current = true;
     setScanning(true);
   };
@@ -235,7 +312,7 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
               </div>
               {scanning && ready && lockedCount < 4 && (
                 <div className="absolute top-3 right-3 flex items-center gap-1.5 rounded-full bg-black/70 px-2.5 py-1 text-[11px] text-emerald-300">
-                  <ScanLine className="w-3.5 h-3.5 animate-pulse" /> Reading cropped zones
+                  <ScanLine className="w-3.5 h-3.5 animate-pulse" /> Local corner matching
                 </div>
               )}
             </div>
@@ -267,6 +344,10 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
               </p>
               {scanError ? <p className="text-xs text-rose-300">{scanError}</p> : null}
               {!validation.unique && validation.complete ? <p className="text-xs text-rose-300">Duplicate card detected — correct or rescan.</p> : null}
+              <div className="flex items-center gap-2 text-xs text-zinc-400">
+                <Switch checked={fallbackEnabled} onCheckedChange={setFallbackEnabled} />
+                GPT fallback for unresolved slots
+              </div>
               <div className="flex gap-2 ml-auto">
                 <button onClick={rescan} className="inline-flex items-center gap-1.5 rounded-full border border-zinc-700 px-4 py-2 text-xs font-semibold hover:bg-zinc-800">
                   <RefreshCw className="w-3.5 h-3.5" /> Rescan all
@@ -275,6 +356,13 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
                   Confirm & score
                 </button>
               </div>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[10px] text-zinc-500" data-testid="scan-timings">
+              <span>Crop/preprocess <b className="text-zinc-300">{timings.crop_ms} ms</b></span>
+              <span>Local recognition <b className="text-zinc-300">{timings.local_ms} ms</b></span>
+              <span>Fallback network <b className="text-zinc-300">{timings.fallback_ms} ms</b></span>
+              <span>Stabilization <b className="text-zinc-300">{timings.stabilization_ms} ms</b></span>
+              <span>Stable hand total <b className="text-zinc-300">{timings.total_ms} ms</b></span>
             </div>
           </div>
         )}

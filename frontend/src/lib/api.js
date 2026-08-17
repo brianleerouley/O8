@@ -26,10 +26,11 @@ export async function scanFrame(file) {
   return data.cards;
 }
 
-export async function scanCardZones(files) {
+export async function fallbackCardZones(files, positions) {
   const form = new FormData();
   files.forEach((file) => form.append("files", file));
-  const { data } = await axios.post(`${API}/scan-zones`, form, {
+  form.append("positions", JSON.stringify(positions));
+  const { data } = await axios.post(`${API}/scan-zone-fallback`, form, {
     headers: { "Content-Type": "multipart/form-data" },
   });
   return data;
