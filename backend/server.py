@@ -1,24 +1,30 @@
-from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import json
-import base64
 import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from pydantic import BaseModel, field_validator
 from typing import List, Dict, Any
-from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+from card_recognition import parse_position_cards_json, parse_recognized_hand_json, parse_zone_cards_json
+from openai_vision import VisionConfigurationError, openai_api_key, recognize_images
+from persistence import clear_hand_records, list_hand_records, persistence_enabled, save_hand_record
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+PERSISTENCE_ENABLED = persistence_enabled()
+client = None
+db = None
+if PERSISTENCE_ENABLED:
+    from motor.motor_asyncio import AsyncIOMotorClient
+
+    mongo_url = os.environ['MONGO_URL']
+    client = AsyncIOMotorClient(mongo_url)
+    db = client[os.environ['DB_NAME']]
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -312,8 +318,16 @@ async def evaluate(req: EvaluateRequest):
 # Card photo recognition (vision) — extracts 4 cards from an uploaded image
 # ----------------------------------------------------------------------------
 
-EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/jpg', 'image/png', 'image/webp'}
+
+
+def require_remote_recognition():
+    if not openai_api_key():
+        raise HTTPException(
+            status_code=503,
+            detail="AI card recognition is not configured. Set OPENAI_API_KEY to enable it.",
+        )
+
 
 RECOGNIZE_PROMPT = (
     "You are a playing-card recognizer. The image shows exactly four playing cards. "
@@ -358,8 +372,7 @@ def _parse_cards_json(text: str) -> List[Dict[str, str]]:
 
 @api_router.post("/recognize-cards")
 async def recognize_cards(file: UploadFile = File(...)):
-    if not EMERGENT_LLM_KEY:
-        raise HTTPException(status_code=500, detail="LLM key not configured on the server.")
+    require_remote_recognition()
     if file.content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=400,
                             detail="Unsupported image type. Please upload a JPEG, PNG, or WEBP.")
@@ -367,39 +380,25 @@ async def recognize_cards(file: UploadFile = File(...)):
     image_bytes = await file.read()
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Empty image file.")
-    image_b64 = base64.b64encode(image_bytes).decode('utf-8')
-
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"card-recognize-{uuid.uuid4()}",
-        system_message="You extract structured data from images and reply with JSON only.",
-    ).with_model("openai", "gpt-5.4")
-
     try:
-        response = await chat.send_message(
-            UserMessage(text=RECOGNIZE_PROMPT, file_contents=[ImageContent(image_base64=image_b64)])
+        response, latency_ms = await recognize_images(
+            RECOGNIZE_PROMPT,
+            [(image_bytes, file.content_type)],
         )
-    except Exception as e:
-        logger.error(f"Vision model error: {e}")
+    except VisionConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        logger.error("OpenAI recognition request failed: %s", exc)
         raise HTTPException(status_code=502, detail="The vision model could not process the image.")
 
     try:
-        cards = _parse_cards_json(response)
-    except Exception as e:
-        logger.error(f"Card parse error: {e} | raw: {response!r}")
+        cards = parse_recognized_hand_json(response)
+    except Exception as exc:
+        logger.warning("OpenAI recognition parse failed: %s", exc)
         raise HTTPException(status_code=422,
                             detail="Could not read the cards clearly. Try a sharper, well-lit photo.")
-
-    if len(cards) != 4:
-        raise HTTPException(status_code=422,
-                            detail=f"Expected 4 cards but detected {len(cards)}. Try a clearer photo of all four cards.")
-
-    ids = [f"{c['rank']}{c['suit']}" for c in cards]
-    if len(set(ids)) != 4:
-        raise HTTPException(status_code=422,
-                            detail="Detected duplicate cards. Please retake the photo so all four cards are distinct.")
-
-    return {"cards": cards}
+    logger.info("OpenAI recognition parse succeeded cards=%d latency_ms=%d", len(cards), latency_ms)
+    return {"cards": cards, "latency_ms": latency_ms}
 
 
 SCAN_PROMPT = (
@@ -418,29 +417,20 @@ SCAN_PROMPT = (
 @api_router.post("/scan-frame")
 async def scan_frame(file: UploadFile = File(...)):
     """Lenient single-frame recognizer for live camera scanning (returns 0-4 cards)."""
-    if not EMERGENT_LLM_KEY:
-        raise HTTPException(status_code=500, detail="LLM key not configured on the server.")
+    require_remote_recognition()
     if file.content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=400, detail="Unsupported image type.")
 
     image_bytes = await file.read()
     if not image_bytes:
         return {"cards": [], "count": 0}
-    image_b64 = base64.b64encode(image_bytes).decode('utf-8')
-
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"card-scan-{uuid.uuid4()}",
-        system_message="You extract structured data from images and reply with JSON only.",
-    ).with_model("openai", "gpt-5.4")
-
     try:
-        response = await chat.send_message(
-            UserMessage(text=SCAN_PROMPT, file_contents=[ImageContent(image_base64=image_b64)])
-        )
+        response, _latency_ms = await recognize_images(SCAN_PROMPT, [(image_bytes, file.content_type)])
         cards = _parse_cards_json(response)
-    except Exception as e:
-        logger.error(f"scan-frame error: {e}")
+    except VisionConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        logger.error("scan-frame error: %s", exc)
         return {"cards": [], "count": 0}
 
     # Dedupe while preserving order, cap at 4
@@ -453,6 +443,108 @@ async def scan_frame(file: UploadFile = File(...)):
         if len(unique) == 4:
             break
     return {"cards": unique, "count": len(unique)}
+
+
+ZONE_SCAN_PROMPT = (
+    "You are reading four fixed playing-card positions from two rapid camera samples. "
+    "Images 1-4 are sample A for card positions 1-4, left to right. "
+    "Images 5-8 are sample B for those same positions 1-4. "
+    "Compare each position's two crops and identify exactly one card per position. "
+    "Respond with ONLY valid JSON, no markdown, shaped as: "
+    '{"cards":[{"rank":"A","suit":"S","confidence":"high","stable_samples":2},null,null,null]}. '
+    "Return exactly four array entries and preserve position order. Use null when unreadable. "
+    "rank must be A, K, Q, J, 10, 9, 8, 7, 6, 5, 4, 3, or 2. "
+    "suit must be S, H, D, or C. confidence must be high, medium, or low. "
+    "Set stable_samples to 2 only when both crops support the same rank and suit; otherwise 1. "
+    "Do not infer a card from another position."
+)
+
+
+@api_router.post("/scan-zones")
+async def scan_zones(files: List[UploadFile] = File(...)):
+    """Recognize four fixed card zones from two successive cropped samples."""
+    require_remote_recognition()
+    if len(files) != 8:
+        raise HTTPException(status_code=400, detail="Expected two samples for each of four card zones.")
+
+    images = []
+    for file in files:
+        if file.content_type not in ALLOWED_IMAGE_TYPES:
+            raise HTTPException(status_code=400, detail="Unsupported card-zone image type.")
+        image_bytes = await file.read()
+        if not image_bytes:
+            raise HTTPException(status_code=400, detail="One or more card-zone images were empty.")
+        images.append((image_bytes, file.content_type))
+
+    try:
+        response, latency_ms = await recognize_images(ZONE_SCAN_PROMPT, images)
+        cards = parse_zone_cards_json(response)
+    except VisionConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        logger.error("scan-zones error: %s", exc)
+        raise HTTPException(status_code=422, detail="Could not stabilize all four card zones.")
+
+    return {
+        "cards": cards,
+        "count": sum(card is not None for card in cards),
+        "latency_ms": latency_ms,
+    }
+
+
+FALLBACK_SCAN_PROMPT = (
+    "You are a fallback recognizer for unresolved playing-card corner crops. "
+    "Each image contains only the upper-left rank and suit corner of one card. "
+    "Read each image independently and preserve image order. "
+    "Respond with ONLY valid JSON shaped as "
+    '{"cards":[{"rank":"A","suit":"S","confidence":"high","stable_samples":2}]}. '
+    "Return one array entry per image, using null when unreadable. "
+    "rank must be A, K, Q, J, 10, 9, 8, 7, 6, 5, 4, 3, or 2. "
+    "suit must be S, H, D, or C. Use stable_samples 2 only for a high-confidence reading."
+)
+
+
+@api_router.post("/scan-zone-fallback")
+async def scan_zone_fallback(
+    files: List[UploadFile] = File(...),
+    positions: str = Form(...),
+):
+    """Remote fallback for only the card corners unresolved by local recognition."""
+    require_remote_recognition()
+    try:
+        slot_positions = json.loads(positions)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid fallback card positions.")
+    if not files or len(files) > 4 or len(slot_positions) != len(files):
+        raise HTTPException(status_code=400, detail="Fallback requires one to four matching card positions.")
+    if any(not isinstance(position, int) or position < 0 or position > 3 for position in slot_positions):
+        raise HTTPException(status_code=400, detail="Fallback card positions must be between 0 and 3.")
+    if len(set(slot_positions)) != len(slot_positions):
+        raise HTTPException(status_code=400, detail="Fallback card positions must be unique.")
+
+    images = []
+    for file in files:
+        if file.content_type not in ALLOWED_IMAGE_TYPES:
+            raise HTTPException(status_code=400, detail="Unsupported fallback corner image type.")
+        image_bytes = await file.read()
+        if not image_bytes:
+            raise HTTPException(status_code=400, detail="One or more fallback corner images were empty.")
+        images.append((image_bytes, file.content_type))
+
+    try:
+        response, latency_ms = await recognize_images(FALLBACK_SCAN_PROMPT, images)
+        cards = parse_position_cards_json(response, len(files))
+    except VisionConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        logger.error("scan-zone-fallback error: %s", exc)
+        raise HTTPException(status_code=422, detail="Fallback could not read the unresolved card corners.")
+
+    return {
+        "positions": slot_positions,
+        "cards": cards,
+        "latency_ms": latency_ms,
+    }
 
 
 # ----------------------------------------------------------------------------
@@ -494,21 +586,20 @@ async def save_hand(req: SaveHandRequest):
         'source': req.source if req.source in ('camera', 'upload') else 'camera',
         'timestamp': datetime.now(timezone.utc).isoformat(),
     }
-    await db.hands.insert_one({**record})
+    await save_hand_record(db, PERSISTENCE_ENABLED, record)
     return record
 
 
 @api_router.get("/hands")
 async def list_hands(limit: int = 50):
-    limit = max(1, min(limit, 100))
-    docs = await db.hands.find({}, {"_id": 0}).sort("timestamp", -1).to_list(limit)
+    docs = await list_hand_records(db, PERSISTENCE_ENABLED, limit)
     return {"hands": docs}
 
 
 @api_router.delete("/hands")
 async def clear_hands():
-    result = await db.hands.delete_many({})
-    return {"deleted": result.deleted_count}
+    deleted = await clear_hand_records(db, PERSISTENCE_ENABLED)
+    return {"deleted": deleted}
 
 
 app.include_router(api_router)
@@ -524,4 +615,5 @@ app.add_middleware(
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
-    client.close()
+    if client is not None:
+        client.close()
