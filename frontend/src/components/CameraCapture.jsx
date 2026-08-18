@@ -237,7 +237,11 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-zinc-900 border-zinc-700 text-zinc-100 max-w-4xl" data-testid="camera-dialog">
+      <DialogContent
+        className="max-h-[calc(100dvh-1rem)] max-w-4xl overflow-y-auto overscroll-contain bg-zinc-900 p-4 text-zinc-100 border-zinc-700 sm:p-6"
+        style={{ paddingBottom: "max(1.5rem, env(safe-area-inset-bottom))" }}
+        data-testid="camera-dialog"
+      >
         <DialogHeader>
           <DialogTitle className="font-head flex items-center gap-2">
             <Radar className="w-5 h-5 text-[#d4af37]" />
@@ -337,7 +341,7 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
                     <button onClick={startCamera} className="inline-flex items-center gap-1.5 rounded-full border border-zinc-700 px-4 py-2 text-xs font-semibold hover:bg-zinc-800">
                       <RefreshCw className="w-3.5 h-3.5" /> Retake
                     </button>
-                    <button onClick={confirm} disabled={!validation.ready} data-testid="camera-confirm-btn" className="rounded-full bg-[#d4af37] px-5 py-2 text-xs font-bold text-zinc-900 disabled:opacity-30">
+                    <button onClick={confirm} disabled={!validation.ready} data-testid="camera-confirm-btn" className="w-full rounded-full bg-[#d4af37] px-5 py-2.5 text-xs font-bold text-zinc-900 disabled:opacity-30 sm:w-auto">
                       Confirm Hand
                     </button>
                   </div>
