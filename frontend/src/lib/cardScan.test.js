@@ -11,6 +11,7 @@ import {
   EMPTY_TEMPORAL_VOTES,
   addTemporalVotes,
   temporalCards,
+  shouldAutoStartScan,
 } from "./cardScan";
 
 const hand = [
@@ -122,4 +123,11 @@ test("quality-weighted temporal consensus favors repeated sharp readings", () =>
   const cards = temporalCards(votes);
   expect(cards[0]).toMatchObject({ rank: "A", suit: "S", confidence: "high" });
   expect(cards.every((card) => card.confidence === "high")).toBe(true);
+});
+
+test("camera recognition starts automatically once the live preview is ready", () => {
+  expect(shouldAutoStartScan({ open: true, ready: true, phase: "preview", started: false })).toBe(true);
+  expect(shouldAutoStartScan({ open: true, ready: false, phase: "preview", started: false })).toBe(false);
+  expect(shouldAutoStartScan({ open: true, ready: true, phase: "processing", started: false })).toBe(false);
+  expect(shouldAutoStartScan({ open: true, ready: true, phase: "preview", started: true })).toBe(false);
 });

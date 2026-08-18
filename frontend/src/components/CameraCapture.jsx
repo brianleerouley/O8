@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Camera, CameraOff, CheckCircle2, Loader2, Radar, RefreshCw } from "lucide-react";
+import { CameraOff, CheckCircle2, Loader2, Radar, RefreshCw } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Switch } from "./ui/switch";
 import { CardSelector } from "./CardSelector";
 import { recognizeCards } from "../lib/api";
 import { cardId } from "../lib/cards";
-import { addTemporalVotes, chooseRecognitionCards, EMPTY_SCAN_SLOTS, EMPTY_TEMPORAL_VOTES, forceConfirmSlot, frameSlotsFromCards, mapDisplayRectToSource, needsRemoteRecognition, scanValidation, temporalCards } from "../lib/cardScan";
+import { addTemporalVotes, chooseRecognitionCards, EMPTY_SCAN_SLOTS, EMPTY_TEMPORAL_VOTES, forceConfirmSlot, frameSlotsFromCards, mapDisplayRectToSource, needsRemoteRecognition, scanValidation, shouldAutoStartScan, temporalCards } from "../lib/cardScan";
 import { frameQualityScore, recognizeFannedCardFrame } from "../lib/localCardRecognition";
 
 export const CAPTURE_GUIDE = { left: 0.04, top: 0.04, width: 0.92, height: 0.72 };
@@ -25,6 +25,7 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const cameraSessionRef = useRef(0);
+  const autoScanStartedRef = useRef(false);
 
   const [phase, setPhase] = useState("preview");
   const [ready, setReady] = useState(false);
@@ -57,6 +58,7 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
     setSlots(EMPTY_SCAN_SLOTS());
     setTimings(EMPTY_TIMINGS);
     setPhase("preview");
+    autoScanStartedRef.current = false;
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera unavailable");
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -155,7 +157,8 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
     let bestQuality = -1;
     let acceptedFrames = 0;
 
-    for (let sample = 0; sample < 10; sample += 1) {
+    const scanDeadline = performance.now() + 4000;
+    for (let sample = 0; sample < 80 && performance.now() < scanDeadline; sample += 1) {
       const frame = captureDisplayedFrame();
       if (frame) {
         const guide = extractGuide(frame);
@@ -212,6 +215,12 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
     setPhase("results");
   }, [captureDisplayedFrame, extractGuide, fallbackEnabled, stopCamera]);
 
+  useEffect(() => {
+    if (!shouldAutoStartScan({ open, ready, phase, started: autoScanStartedRef.current })) return;
+    autoScanStartedRef.current = true;
+    capture();
+  }, [capture, open, phase, ready]);
+
   const correctSlot = (index, card) => {
     setSlots((current) =>
       current.map((slot, slotIndex) => (slotIndex === index ? forceConfirmSlot(slot, card) : slot))
@@ -235,7 +244,7 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
             Capture your Omaha8 hand
           </DialogTitle>
           <DialogDescription className="text-zinc-400">
-            Fan 4 cards in the highlighted area. Capture samples a short video burst and locks repeated matches.
+            Fan 4 cards in the highlighted area. Scanning begins automatically when the camera is ready.
           </DialogDescription>
         </DialogHeader>
 
@@ -258,7 +267,7 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
               Keep all 4 rank/suit corners visible
             </p>
             <div className="relative rounded-xl overflow-hidden bg-black aspect-video ring-1 ring-zinc-700">
-              {phase === "preview" ? (
+              {phase !== "results" ? (
                 <video ref={videoRef} playsInline muted className="w-full h-full object-cover" />
               ) : (
                 <img src={capturedImage || ""} alt="Captured four-card hand" className="w-full h-full object-cover" />
@@ -274,9 +283,9 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
                 }}
               />
               {phase === "processing" && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/65">
-                  <Loader2 className="w-8 h-8 animate-spin text-[#d4af37]" />
-                  <span className="text-sm font-semibold">Checking sharp frames and building consensus…</span>
+                <div className="absolute inset-x-3 bottom-3 flex items-center justify-center gap-2 rounded-full bg-black/75 px-4 py-2.5">
+                  <Loader2 className="w-4 h-4 animate-spin text-[#d4af37]" />
+                  <span className="text-xs font-semibold">Hold the four card corners steady — scanning automatically…</span>
                 </div>
               )}
             </div>
@@ -291,9 +300,9 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
                   <button onClick={manualEntry} className="rounded-full border border-zinc-700 px-5 py-2.5 text-sm font-semibold hover:bg-zinc-800">
                     Manual Entry
                   </button>
-                  <button onClick={capture} disabled={!ready} data-testid="camera-capture-btn" className="inline-flex items-center gap-2 rounded-full bg-[#d4af37] px-6 py-2.5 text-sm font-bold text-zinc-900 disabled:opacity-30">
-                    <Camera className="w-4 h-4" /> Capture
-                  </button>
+                  <span data-testid="camera-auto-scan-status" className="inline-flex items-center gap-2 rounded-full bg-[#d4af37]/15 px-5 py-2.5 text-sm font-semibold text-[#f4d66d]">
+                    <Loader2 className="w-4 h-4 animate-spin" /> Starting automatic scan…
+                  </span>
                 </div>
               </div>
             ) : phase === "results" ? (

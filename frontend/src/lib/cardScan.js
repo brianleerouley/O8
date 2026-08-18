@@ -106,6 +106,10 @@ export function stabilizeSlots(previous, detected) {
 
 export const EMPTY_TEMPORAL_VOTES = () => EMPTY_HAND.map(() => new Map());
 
+export function shouldAutoStartScan({ open, ready, phase, started }) {
+  return Boolean(open && ready && phase === "preview" && !started);
+}
+
 export function addTemporalVotes(votes, detected, quality = 1) {
   const confidenceWeight = { high: 1, medium: 0.65, low: 0.25 };
   return votes.map((slotVotes, index) => {
