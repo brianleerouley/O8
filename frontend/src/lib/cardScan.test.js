@@ -12,6 +12,8 @@ import {
   addTemporalVotes,
   temporalCards,
   shouldAutoStartScan,
+  normalizeScanDelayMs,
+  shouldSkipVerification,
 } from "./cardScan";
 
 const hand = [
@@ -130,4 +132,19 @@ test("camera recognition starts automatically once the live preview is ready", (
   expect(shouldAutoStartScan({ open: true, ready: false, phase: "preview", started: false })).toBe(false);
   expect(shouldAutoStartScan({ open: true, ready: true, phase: "processing", started: false })).toBe(false);
   expect(shouldAutoStartScan({ open: true, ready: true, phase: "preview", started: true })).toBe(false);
+});
+
+test("scan delay defaults to two seconds and accepts a configured value", () => {
+  expect(normalizeScanDelayMs(undefined)).toBe(2000);
+  expect(normalizeScanDelayMs(null)).toBe(2000);
+  expect(normalizeScanDelayMs("3000")).toBe(3000);
+  expect(normalizeScanDelayMs(-1)).toBe(2000);
+  expect(normalizeScanDelayMs(12000)).toBe(10000);
+});
+
+test("only a complete unique high-confidence hand skips verification", () => {
+  expect(shouldSkipVerification(hand)).toBe(true);
+  expect(shouldSkipVerification(hand.map((card, index) => index === 2 ? { ...card, confidence: "medium" } : card))).toBe(false);
+  expect(shouldSkipVerification([hand[0], hand[0], hand[2], hand[3]])).toBe(false);
+  expect(shouldSkipVerification(hand.slice(0, 3))).toBe(false);
 });

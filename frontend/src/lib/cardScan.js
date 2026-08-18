@@ -110,6 +110,16 @@ export function shouldAutoStartScan({ open, ready, phase, started }) {
   return Boolean(open && ready && phase === "preview" && !started);
 }
 
+export function normalizeScanDelayMs(value, fallback = 2000) {
+  if (value === null || value === undefined || value === "") return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.min(parsed, 10000) : fallback;
+}
+
+export function shouldSkipVerification(cards) {
+  return isCompleteUniqueHand(cards) && cards.every((card) => card.confidence === "high");
+}
+
 export function addTemporalVotes(votes, detected, quality = 1) {
   const confidenceWeight = { high: 1, medium: 0.65, low: 0.25 };
   return votes.map((slotVotes, index) => {

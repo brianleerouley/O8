@@ -5,12 +5,14 @@ import { Switch } from "./ui/switch";
 import { CardSelector } from "./CardSelector";
 import { recognizeCards } from "../lib/api";
 import { cardId } from "../lib/cards";
-import { addTemporalVotes, chooseRecognitionCards, EMPTY_SCAN_SLOTS, EMPTY_TEMPORAL_VOTES, forceConfirmSlot, frameSlotsFromCards, mapDisplayRectToSource, needsRemoteRecognition, scanValidation, shouldAutoStartScan, temporalCards } from "../lib/cardScan";
+import { addTemporalVotes, chooseRecognitionCards, EMPTY_SCAN_SLOTS, EMPTY_TEMPORAL_VOTES, forceConfirmSlot, frameSlotsFromCards, mapDisplayRectToSource, needsRemoteRecognition, normalizeScanDelayMs, scanValidation, shouldAutoStartScan, shouldSkipVerification, temporalCards } from "../lib/cardScan";
 import { frameQualityScore, recognizeFannedCardFrame } from "../lib/localCardRecognition";
 
 export const CAPTURE_GUIDE = { left: 0.04, top: 0.04, width: 0.92, height: 0.72 };
 
 const EMPTY_TIMINGS = { capture_ms: 0, local_ms: 0, fallback_ms: 0, total_ms: 0 };
+const DEFAULT_SCAN_DELAY_MS = normalizeScanDelayMs(process.env.REACT_APP_SCAN_START_DELAY_MS);
+const SCAN_DELAY_OPTIONS = [0, 1000, 2000, 3000, 5000];
 
 const canvasFile = (canvas, name) =>
   new Promise((resolve) =>
@@ -35,6 +37,10 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
   const [slots, setSlots] = useState(() => EMPTY_SCAN_SLOTS());
   const [fallbackEnabled, setFallbackEnabled] = useState(true);
   const [timings, setTimings] = useState(EMPTY_TIMINGS);
+  const [scanDelayMs, setScanDelayMs] = useState(() =>
+    normalizeScanDelayMs(window.localStorage.getItem("omaha8ScanDelayMs"), DEFAULT_SCAN_DELAY_MS)
+  );
+  const [scanStartsInMs, setScanStartsInMs] = useState(scanDelayMs);
 
   const validation = useMemo(() => scanValidation(slots), [slots]);
   const usedIds = validation.cards.filter((card) => card?.rank && card?.suit).map(cardId);
@@ -212,14 +218,39 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
       total_ms: Math.round(performance.now() - started),
     });
     setScanError(fallbackError || (acceptedFrames < 2 ? "Too few sharp, glare-free frames were found. Verify the cards or retake the scan." : null));
+    if (shouldSkipVerification(cards)) {
+      onDetected(cards.map(({ rank, suit, confidence }) => ({ rank, suit, confidence })));
+      onOpenChange(false);
+      return;
+    }
     setPhase("results");
-  }, [captureDisplayedFrame, extractGuide, fallbackEnabled, stopCamera]);
+  }, [captureDisplayedFrame, extractGuide, fallbackEnabled, onDetected, onOpenChange, stopCamera]);
 
   useEffect(() => {
     if (!shouldAutoStartScan({ open, ready, phase, started: autoScanStartedRef.current })) return;
     autoScanStartedRef.current = true;
-    capture();
-  }, [capture, open, phase, ready]);
+    setScanStartsInMs(scanDelayMs);
+    const startedAt = performance.now();
+    const countdown = window.setInterval(() => {
+      setScanStartsInMs(Math.max(0, scanDelayMs - (performance.now() - startedAt)));
+    }, 100);
+    const timer = window.setTimeout(() => {
+      window.clearInterval(countdown);
+      setScanStartsInMs(0);
+      capture();
+    }, scanDelayMs);
+    return () => {
+      window.clearInterval(countdown);
+      window.clearTimeout(timer);
+    };
+  }, [capture, open, phase, ready, scanDelayMs]);
+
+  const changeScanDelay = (event) => {
+    const next = normalizeScanDelayMs(event.target.value, DEFAULT_SCAN_DELAY_MS);
+    autoScanStartedRef.current = false;
+    setScanDelayMs(next);
+    window.localStorage.setItem("omaha8ScanDelayMs", String(next));
+  };
 
   const correctSlot = (index, card) => {
     setSlots((current) =>
@@ -248,7 +279,7 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
             Capture your Omaha8 hand
           </DialogTitle>
           <DialogDescription className="text-zinc-400">
-            Fan 4 cards in the highlighted area. Scanning begins automatically when the camera is ready.
+            Fan 4 cards in the highlighted area. Scanning begins after your positioning delay.
           </DialogDescription>
         </DialogHeader>
 
@@ -300,12 +331,26 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
                   <Switch checked={fallbackEnabled} onCheckedChange={setFallbackEnabled} />
                   AI recognition available when needed
                 </div>
+                <label className="flex items-center gap-2 text-xs text-zinc-400">
+                  Positioning time
+                  <select
+                    value={scanDelayMs}
+                    onChange={changeScanDelay}
+                    aria-label="Positioning time before scan"
+                    className="rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-zinc-200"
+                  >
+                    {SCAN_DELAY_OPTIONS.map((delay) => (
+                      <option key={delay} value={delay}>{delay === 0 ? "None" : `${delay / 1000} sec`}</option>
+                    ))}
+                  </select>
+                </label>
                 <div className="flex gap-2 ml-auto">
                   <button onClick={manualEntry} className="rounded-full border border-zinc-700 px-5 py-2.5 text-sm font-semibold hover:bg-zinc-800">
                     Manual Entry
                   </button>
                   <span data-testid="camera-auto-scan-status" className="inline-flex items-center gap-2 rounded-full bg-[#d4af37]/15 px-5 py-2.5 text-sm font-semibold text-[#f4d66d]">
-                    <Loader2 className="w-4 h-4 animate-spin" /> Starting automatic scan…
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    {scanStartsInMs > 0 ? `Position cards — scanning in ${Math.ceil(scanStartsInMs / 1000)}…` : "Starting automatic scan…"}
                   </span>
                 </div>
               </div>
