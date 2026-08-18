@@ -37,6 +37,8 @@ play/fold recommendation.
   camera-first "Scan my hand" CTA, Clear (card-back placeholders), removed Share + Evaluate.
 - 2026-06: Hand history (`POST/GET/DELETE /api/hands`, MongoDB, camera+upload only, scrollable
   list, reload/clear) and per-card confidence flags (amber badge on low/medium reads).
+- 2026-08: V4 camera scanning uses temporal recognition, a configurable positioning delay,
+  high-confidence auto-analysis, and a larger mobile-first "Scan my hand" primary action.
 
 ## Deployment
 - Deployed to production: https://hand-recommend.emergent.host (user redeploys from preview).
@@ -47,6 +49,8 @@ play/fold recommendation.
 - **Beginner Glossary**: tap-to-learn definitions (nut low, quartering, scoop, quartered).
 - **History Filters**: filter saved hands by verdict (Fold / Playable / Premium).
 - **Confidence Auto-Focus**: jump to first flagged card for one-tap verification.
+- **Configurable Scan Button Position**: let each user place "Scan my hand" at the top or
+  bottom of the screen to match how the phone is physically positioned and held.
 - **Account Login**: Emergent Google auth or JWT to restrict access to account holders.
 - **Position Advice**: early/late seat toggle that adjusts play/fold.
 - **Weekly Monte-Carlo valuation refinement**; **Android distribution** (from transcript, future phases).
