@@ -5,8 +5,8 @@ import { Switch } from "./ui/switch";
 import { CardSelector } from "./CardSelector";
 import { recognizeCards } from "../lib/api";
 import { cardId } from "../lib/cards";
-import { chooseRecognitionCards, EMPTY_SCAN_SLOTS, forceConfirmSlot, frameSlotsFromCards, mapDisplayRectToSource, needsRemoteRecognition, scanValidation } from "../lib/cardScan";
-import { recognizeFannedCardFrame } from "../lib/localCardRecognition";
+import { addTemporalVotes, chooseRecognitionCards, EMPTY_SCAN_SLOTS, EMPTY_TEMPORAL_VOTES, forceConfirmSlot, frameSlotsFromCards, mapDisplayRectToSource, needsRemoteRecognition, scanValidation, temporalCards } from "../lib/cardScan";
+import { frameQualityScore, recognizeFannedCardFrame } from "../lib/localCardRecognition";
 
 export const CAPTURE_GUIDE = { left: 0.04, top: 0.04, width: 0.92, height: 0.72 };
 
@@ -142,25 +142,47 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
 
   const capture = useCallback(async () => {
     const started = performance.now();
-    const frame = captureDisplayedFrame();
-    if (!frame) {
+    if (!captureDisplayedFrame()) {
       setScanError("The camera frame is not ready yet. Hold steady and try again.");
       return;
     }
-    setCapturedImage(frame.toDataURL("image/jpeg", 0.9));
-    stopCamera();
     setPhase("processing");
     setScanError(null);
-
-    const guide = extractGuide(frame);
-    const captureMs = performance.now() - started;
     const localStarted = performance.now();
-    const localResult = recognizeFannedCardFrame(guide);
-    let cards = localResult.cards;
-    if (process.env.NODE_ENV !== "production") {
-      globalThis.__OMAHA8_SCAN_DEBUG__ = localResult.debug;
-      console.debug("[Omaha8 card recognition]", localResult.debug);
+    let votes = EMPTY_TEMPORAL_VOTES();
+    let cards = [];
+    let bestGuide = null;
+    let bestQuality = -1;
+    let acceptedFrames = 0;
+
+    for (let sample = 0; sample < 10; sample += 1) {
+      const frame = captureDisplayedFrame();
+      if (frame) {
+        const guide = extractGuide(frame);
+        const quality = frameQualityScore(guide);
+        if (quality > bestQuality) {
+          bestQuality = quality;
+          bestGuide = guide;
+          setCapturedImage(frame.toDataURL("image/jpeg", 0.82));
+        }
+        if (quality >= 0.18) {
+          const localResult = recognizeFannedCardFrame(guide);
+          votes = addTemporalVotes(votes, localResult.cards, quality);
+          cards = temporalCards(votes);
+          acceptedFrames += 1;
+          setSlots(frameSlotsFromCards(cards));
+          if (cards.length === 4 && cards.every((card) => card?.confidence === "high")) break;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 45));
     }
+    stopCamera();
+    if (!bestGuide) {
+      setScanError("No usable camera frames were available. Hold steady and try again.");
+      setPhase("results");
+      return;
+    }
+    const captureMs = performance.now() - started;
     const localMs = performance.now() - localStarted;
     let fallbackMs = 0;
     let fallbackError = null;
@@ -169,7 +191,7 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
     if (fallbackEnabled && localUncertain) {
       const fallbackStarted = performance.now();
       try {
-        const file = await canvasFile(guide, "fanned-hand.jpg");
+        const file = await canvasFile(bestGuide, "fanned-hand.jpg");
         if (!file) throw new Error("Could not encode captured frame.");
         cards = chooseRecognitionCards(cards, await recognizeCards(file));
       } catch (err) {
@@ -186,7 +208,7 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
       fallback_ms: Math.round(fallbackMs),
       total_ms: Math.round(performance.now() - started),
     });
-    setScanError(fallbackError);
+    setScanError(fallbackError || (acceptedFrames < 2 ? "Too few sharp, glare-free frames were found. Verify the cards or retake the scan." : null));
     setPhase("results");
   }, [captureDisplayedFrame, extractGuide, fallbackEnabled, stopCamera]);
 
@@ -213,7 +235,7 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
             Capture your Omaha8 hand
           </DialogTitle>
           <DialogDescription className="text-zinc-400">
-            Fan 4 cards in the highlighted area and tap Capture.
+            Fan 4 cards in the highlighted area. Capture samples a short video burst and locks repeated matches.
           </DialogDescription>
         </DialogHeader>
 
@@ -254,7 +276,7 @@ export const CameraCapture = ({ open, onOpenChange, onDetected }) => {
               {phase === "processing" && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/65">
                   <Loader2 className="w-8 h-8 animate-spin text-[#d4af37]" />
-                  <span className="text-sm font-semibold">Reading captured cards…</span>
+                  <span className="text-sm font-semibold">Checking sharp frames and building consensus…</span>
                 </div>
               )}
             </div>

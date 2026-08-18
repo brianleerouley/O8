@@ -8,6 +8,9 @@ import {
   scanValidation,
   stabilizeSlots,
   unresolvedFallbackPositions,
+  EMPTY_TEMPORAL_VOTES,
+  addTemporalVotes,
+  temporalCards,
 } from "./cardScan";
 
 const hand = [
@@ -108,4 +111,15 @@ test("invalid remote results do not replace usable local partial results", () =>
   const local = hand.slice(0, 2);
   expect(chooseRecognitionCards(local, [hand[0]])).toEqual(local);
   expect(chooseRecognitionCards(local, [hand[0], hand[1], hand[2], { rank: "Z", suit: "D" }])).toEqual(local);
+});
+
+test("quality-weighted temporal consensus favors repeated sharp readings", () => {
+  let votes = EMPTY_TEMPORAL_VOTES();
+  votes = addTemporalVotes(votes, hand, 0.95);
+  votes = addTemporalVotes(votes, hand, 0.9);
+  votes = addTemporalVotes(votes, hand, 0.85);
+  votes = addTemporalVotes(votes, [{ ...hand[0], rank: "4" }, ...hand.slice(1)], 0.15);
+  const cards = temporalCards(votes);
+  expect(cards[0]).toMatchObject({ rank: "A", suit: "S", confidence: "high" });
+  expect(cards.every((card) => card.confidence === "high")).toBe(true);
 });

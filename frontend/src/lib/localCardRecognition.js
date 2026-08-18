@@ -11,6 +11,30 @@ const NORMAL_HEIGHT = 32;
 
 let templateCache = null;
 
+export function frameQualityScore(canvas) {
+  const width = Math.min(160, canvas.width);
+  const height = Math.max(1, Math.round(width * canvas.height / canvas.width));
+  const sample = document.createElement("canvas");
+  sample.width = width;
+  sample.height = height;
+  const sampleContext = sample.getContext("2d", { willReadFrequently: true });
+  sampleContext.drawImage(canvas, 0, 0, width, height);
+  const { data } = sampleContext.getImageData(0, 0, width, height);
+  let glare = 0;
+  let edges = 0;
+  let previous = 0;
+  for (let index = 0; index < data.length; index += 4) {
+    const gray = data[index] * 0.299 + data[index + 1] * 0.587 + data[index + 2] * 0.114;
+    if (gray > 248) glare += 1;
+    if (index > 0) edges += Math.abs(gray - previous);
+    previous = gray;
+  }
+  const pixels = width * height;
+  const sharpness = Math.min(1, edges / pixels / 24);
+  const glarePenalty = Math.min(1, (glare / pixels) / 0.35);
+  return Math.max(0, Math.min(1, sharpness * (1 - glarePenalty * 0.75)));
+}
+
 export function otsuThreshold(grays) {
   const histogram = new Array(256).fill(0);
   grays.forEach((value) => histogram[value]++);

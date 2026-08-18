@@ -104,6 +104,35 @@ export function stabilizeSlots(previous, detected) {
   });
 }
 
+export const EMPTY_TEMPORAL_VOTES = () => EMPTY_HAND.map(() => new Map());
+
+export function addTemporalVotes(votes, detected, quality = 1) {
+  const confidenceWeight = { high: 1, medium: 0.65, low: 0.25 };
+  return votes.map((slotVotes, index) => {
+    const next = new Map(slotVotes);
+    const card = detected[index];
+    if (!card?.rank || !card?.suit) return next;
+    const id = cardId(card);
+    const weight = Math.max(0, Math.min(1, quality)) * (confidenceWeight[card.confidence] || 0.25);
+    const current = next.get(id) || { card, weight: 0, observations: 0 };
+    next.set(id, { card, weight: current.weight + weight, observations: current.observations + 1 });
+    return next;
+  });
+}
+
+export function temporalCards(votes) {
+  return votes.map((slotVotes) => {
+    const ranked = [...slotVotes.values()].sort((a, b) => b.weight - a.weight);
+    if (!ranked.length) return null;
+    const [winner, runnerUp] = ranked;
+    const margin = winner.weight - (runnerUp?.weight || 0);
+    const confidence = winner.observations >= 3 && winner.weight >= 2.1 && margin >= 0.7
+      ? "high"
+      : winner.observations >= 2 && margin >= 0.35 ? "medium" : "low";
+    return { ...winner.card, confidence, stable_samples: Math.min(2, winner.observations) };
+  });
+}
+
 export function forceConfirmSlot(slot, card) {
   return {
     card: { rank: card.rank, suit: card.suit, confidence: "high" },
