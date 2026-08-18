@@ -265,9 +265,9 @@ export default function Evaluator() {
                   data-testid="camera-btn"
                   onClick={() => setCameraOpen(true)}
                   disabled={scanning}
-                  className="inline-flex items-center gap-2 rounded-full bg-[#d4af37] px-6 py-3 text-sm font-bold text-zinc-900 transition-all hover:scale-105 hover:shadow-[0_0_30px_-6px_rgba(212,175,55,0.6)] disabled:opacity-40 disabled:hover:scale-100"
+                  className="inline-flex w-full items-center justify-center gap-3 rounded-2xl bg-[#d4af37] px-8 py-4 text-base font-extrabold text-zinc-900 shadow-[0_0_30px_-8px_rgba(212,175,55,0.75)] transition-all hover:scale-[1.02] hover:bg-[#e0c04f] hover:shadow-[0_0_38px_-6px_rgba(212,175,55,0.8)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[#d4af37]/40 disabled:opacity-40 disabled:hover:scale-100 sm:w-auto"
                 >
-                  <Camera className="w-4 h-4" />
+                  <Camera className="h-5 w-5" strokeWidth={2.5} />
                   Scan my hand
                 </button>
                 <input
